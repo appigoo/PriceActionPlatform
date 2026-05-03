@@ -120,20 +120,28 @@ def generate_ai_analysis(ticker, df, patterns, market_struct, volume_analysis,
             macro_descs.append(f"【{p['name']}】{d}")
         sections.append("**〔型態學〕**\n" + "\n".join(macro_descs))
 
-    # ── Section 6：成交量分析 ────────────────────────────────────────────
-    if vol_ratio >= 2.0:
-        vol_txt = (f"成交量爆量至均量 {vol_ratio:.1f} 倍——{interp}，{smart_vol}。"
-                   f"如此大量必有主力資金介入，方向與K線形態共同確認訊號。")
-    elif vol_ratio >= 1.3:
-        vol_txt = (f"成交量放大至均量 {vol_ratio:.1f} 倍，{vol_sig}，"
-                   f"{interp}。量價配合良好，訊號可信度提升。")
-    elif vol_ratio < 0.7:
-        vol_txt = (f"成交量縮量（僅均量 {vol_ratio:.1f} 倍），{interp}。"
-                   f"縮量整理期間主力未離場，方向選擇前蓄勢。")
-    else:
-        vol_txt = f"成交量正常（{vol_ratio:.1f}x 均量），{interp}。"
+    # ── Section 6：成交量分析（集中最新5根）────────────────────────────────
+    r5        = volume_analysis.get('recent5_ratio', 1.0)
+    vbias     = volume_analysis.get('vol_bias', '')
+    vdiv      = volume_analysis.get('vol_divergence', '')
 
-    sections.append(f"**〔成交量分析〕**\n{vol_txt}")
+    if vol_ratio >= 2.0:
+        vol_txt = (f"最新一根爆量至均量 {vol_ratio:.1f} 倍——{interp}，{smart_vol}。"
+                   f"近5根整體量比 {r5:.1f}x，{vbias}，主力資金大量介入。")
+    elif vol_ratio >= 1.3:
+        vol_txt = (f"最新一根成交量放大（{vol_ratio:.1f}x均量），{vol_sig}。"
+                   f"近5根量比 {r5:.1f}x，{vbias}，量價配合良好，訊號可信度高。")
+    elif vol_ratio < 0.7:
+        vol_txt = (f"最新一根縮量（{vol_ratio:.1f}x均量），{interp}。"
+                   f"近5根量比 {r5:.1f}x，{vbias}，主力未大量離場。")
+    else:
+        vol_txt = (f"最新一根成交量正常（{vol_ratio:.1f}x均量），{interp}。"
+                   f"近5根量比 {r5:.1f}x，{vbias}。")
+
+    if vdiv:
+        vol_txt += f" {vdiv}"
+
+    sections.append(f"**〔成交量分析（最新5根）〕**\n{vol_txt}")
 
     # ── Section 7：SMC 主力行為 ──────────────────────────────────────────
     if sm_desc:
