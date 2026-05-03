@@ -1,134 +1,155 @@
-"""Professional Dark Theme Candlestick Chart with SMC annotations"""
+"""
+Candlestick Chart - Warm Cream Theme
+風格完全對齊附件截圖：白/米色背景、淺灰網格、柔和紅綠
+"""
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
-import pandas as pd
+
+# ── Colour palette（附件風格）──────────────────────────────────────────────────
+BULL_CANDLE  = "#3d8c5f"       # 柔和綠
+BEAR_CANDLE  = "#c0392b"       # 柔和紅
+BULL_FILL    = "#3d8c5f"
+BEAR_FILL    = "#c0392b"
+VOL_BULL     = "rgba(61,140,95,0.55)"
+VOL_BEAR     = "rgba(192,57,43,0.55)"
+VOL_BULL_DIM = "rgba(61,140,95,0.25)"
+VOL_BEAR_DIM = "rgba(192,57,43,0.25)"
+EMA20_COLOR  = "#5b8fd4"       # 藍
+EMA50_COLOR  = "#b07d2e"       # 金
+GRID_COLOR   = "#ede9e3"       # 淺米灰
+AXIS_COLOR   = "#b8b2aa"
+BG_PLOT      = "#ffffff"
+BG_PAPER     = "#f9f7f4"
+FONT_COLOR   = "#6b6560"
+SUP_COLOR    = "#3d8c5f"
+RES_COLOR    = "#c0392b"
+ZONE_BULL    = "rgba(61,140,95,0.05)"
+ZONE_BEAR    = "rgba(192,57,43,0.05)"
 
 
 def build_chart(df, ticker, interval, sr_levels, signals, market_struct, patterns) -> go.Figure:
-    dates = df.index
-    opens = df['Open'].values
-    highs = df['High'].values
-    lows = df['Low'].values
+    dates  = df.index
+    opens  = df['Open'].values
+    highs  = df['High'].values
+    lows   = df['Low'].values
     closes = df['Close'].values
-    vols = df['Volume'].values
-    n = len(df)
+    vols   = df['Volume'].values
+    n      = len(df)
 
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.72, 0.28],
+        vertical_spacing=0.02,
+        row_heights=[0.70, 0.30],
     )
 
-    # ── CANDLESTICKS ────────────────────────────────────────────────────────
+    # ── CANDLESTICKS ──────────────────────────────────────────────────────────
     fig.add_trace(go.Candlestick(
         x=dates,
         open=opens, high=highs, low=lows, close=closes,
         name="K線",
-        increasing_line_color='#00c896',
-        decreasing_line_color='#ff4560',
-        increasing_fillcolor='#00c896',
-        decreasing_fillcolor='#ff4560',
+        increasing_line_color=BULL_CANDLE,
+        decreasing_line_color=BEAR_CANDLE,
+        increasing_fillcolor=BULL_FILL,
+        decreasing_fillcolor=BEAR_FILL,
         line_width=1,
     ), row=1, col=1)
 
-    # ── EMAs ────────────────────────────────────────────────────────────────
+    # ── EMA LINES ─────────────────────────────────────────────────────────────
     ema20 = market_struct.get('ema20')
     ema50 = market_struct.get('ema50')
     if ema20 is not None:
         fig.add_trace(go.Scatter(
-            x=dates, y=ema20, name="EMA20",
-            line=dict(color='#0099ff', width=1.5, dash='dot'),
-            opacity=0.8,
+            x=dates, y=ema20, name="EMA 20",
+            line=dict(color=EMA20_COLOR, width=1.5, dash='dot'),
+            opacity=0.85,
         ), row=1, col=1)
     if ema50 is not None:
         fig.add_trace(go.Scatter(
-            x=dates, y=ema50, name="EMA50",
-            line=dict(color='#f5a623', width=1.5, dash='dot'),
-            opacity=0.8,
+            x=dates, y=ema50, name="EMA 50",
+            line=dict(color=EMA50_COLOR, width=1.5, dash='dot'),
+            opacity=0.85,
         ), row=1, col=1)
 
-    # ── SUPPORT LEVELS ───────────────────────────────────────────────────────
-    supports = sr_levels.get('supports', [])
-    for i, s in enumerate(supports[:3]):
+    # ── DEMAND ZONES（淡綠色區塊）────────────────────────────────────────────
+    for (lo, hi) in sr_levels.get('demand_zones', [])[:2]:
+        fig.add_hrect(
+            y0=lo, y1=hi, row=1, col=1,
+            fillcolor=ZONE_BULL, line_width=0,
+        )
+
+    # ── SUPPLY ZONES（淡紅色區塊）────────────────────────────────────────────
+    for (lo, hi) in sr_levels.get('supply_zones', [])[:2]:
+        fig.add_hrect(
+            y0=lo, y1=hi, row=1, col=1,
+            fillcolor=ZONE_BEAR, line_width=0,
+        )
+
+    # ── SUPPORT LINES ─────────────────────────────────────────────────────────
+    for i, s in enumerate(sr_levels.get('supports', [])[:3]):
         fig.add_hline(
             y=s, row=1, col=1,
-            line=dict(color='#00c896', width=1, dash='dash'),
-            annotation_text=f"支撐 ${s:.2f}" if i == 0 else f"S${s:.2f}",
+            line=dict(color=SUP_COLOR, width=1, dash='dash'),
+            annotation_text=f"支撐 ${s:.2f}" if i == 0 else f"S {s:.2f}",
             annotation_position="left",
-            annotation_font=dict(color='#00c896', size=10),
-            opacity=0.7,
+            annotation_font=dict(color=SUP_COLOR, size=9, family="IBM Plex Mono"),
+            opacity=0.65,
         )
 
-    # ── RESISTANCE LEVELS ────────────────────────────────────────────────────
-    resistances = sr_levels.get('resistances', [])
-    for i, r in enumerate(resistances[:3]):
+    # ── RESISTANCE LINES ──────────────────────────────────────────────────────
+    for i, r in enumerate(sr_levels.get('resistances', [])[:3]):
         fig.add_hline(
             y=r, row=1, col=1,
-            line=dict(color='#ff4560', width=1, dash='dash'),
-            annotation_text=f"阻力 ${r:.2f}" if i == 0 else f"R${r:.2f}",
+            line=dict(color=RES_COLOR, width=1, dash='dash'),
+            annotation_text=f"阻力 ${r:.2f}" if i == 0 else f"R {r:.2f}",
             annotation_position="right",
-            annotation_font=dict(color='#ff4560', size=10),
-            opacity=0.7,
+            annotation_font=dict(color=RES_COLOR, size=9, family="IBM Plex Mono"),
+            opacity=0.65,
         )
 
-    # ── DEMAND ZONES ─────────────────────────────────────────────────────────
-    for (low_z, high_z) in sr_levels.get('demand_zones', [])[:2]:
-        fig.add_hrect(
-            y0=low_z, y1=high_z, row=1, col=1,
-            fillcolor="rgba(0,200,150,0.07)",
-            line_width=0,
-        )
-
-    # ── SUPPLY ZONES ─────────────────────────────────────────────────────────
-    for (low_z, high_z) in sr_levels.get('supply_zones', [])[:2]:
-        fig.add_hrect(
-            y0=low_z, y1=high_z, row=1, col=1,
-            fillcolor="rgba(255,69,96,0.07)",
-            line_width=0,
-        )
-
-    # ── SWING HIGHS / LOWS ────────────────────────────────────────────────────
-    swing_highs = market_struct.get('swing_highs', [])
-    swing_lows = market_struct.get('swing_lows', [])
-    if swing_highs:
-        sh_x = [dates[min(i, n-1)] for i, _ in swing_highs]
-        sh_y = [v for _, v in swing_highs]
+    # ── SWING HIGH / LOW MARKERS ──────────────────────────────────────────────
+    sh = market_struct.get('swing_highs', [])
+    sl = market_struct.get('swing_lows', [])
+    if sh:
+        sh_x = [dates[min(i, n-1)] for i, _ in sh]
+        sh_y = [v for _, v in sh]
         fig.add_trace(go.Scatter(
             x=sh_x, y=sh_y, mode='markers',
-            marker=dict(symbol='triangle-down', color='#ff4560', size=8),
+            marker=dict(symbol='triangle-down', color=RES_COLOR, size=7, opacity=0.75),
             name='Swing High', showlegend=False,
         ), row=1, col=1)
-    if swing_lows:
-        sl_x = [dates[min(i, n-1)] for i, _ in swing_lows]
-        sl_y = [v for _, v in swing_lows]
+    if sl:
+        sl_x = [dates[min(i, n-1)] for i, _ in sl]
+        sl_y = [v for _, v in sl]
         fig.add_trace(go.Scatter(
             x=sl_x, y=sl_y, mode='markers',
-            marker=dict(symbol='triangle-up', color='#00c896', size=8),
+            marker=dict(symbol='triangle-up', color=SUP_COLOR, size=7, opacity=0.75),
             name='Swing Low', showlegend=False,
         ), row=1, col=1)
 
-    # ── BUY / SELL ARROWS ────────────────────────────────────────────────────
+    # ── BUY / SELL SIGNAL ARROWS ──────────────────────────────────────────────
     primary = signals.get('primary', 'NEUTRAL')
     if primary == 'BUY':
         fig.add_trace(go.Scatter(
-            x=[dates[-1]], y=[lows[-1] * 0.995],
+            x=[dates[-1]], y=[lows[-1] * 0.994],
             mode='markers+text',
-            marker=dict(symbol='triangle-up', color='#00ff88', size=20, line=dict(width=2, color='#00c896')),
+            marker=dict(symbol='triangle-up', color=BULL_CANDLE, size=18,
+                        line=dict(width=1.5, color='#2a6b48')),
             text=["▲ BUY"],
             textposition="bottom center",
-            textfont=dict(color='#00ff88', size=11),
+            textfont=dict(color=BULL_CANDLE, size=10, family="IBM Plex Mono"),
             name='BUY Signal',
         ), row=1, col=1)
     elif primary == 'SELL':
         fig.add_trace(go.Scatter(
-            x=[dates[-1]], y=[highs[-1] * 1.005],
+            x=[dates[-1]], y=[highs[-1] * 1.006],
             mode='markers+text',
-            marker=dict(symbol='triangle-down', color='#ff2244', size=20, line=dict(width=2, color='#ff4560')),
+            marker=dict(symbol='triangle-down', color=BEAR_CANDLE, size=18,
+                        line=dict(width=1.5, color='#8b1a10')),
             text=["▼ SELL"],
             textposition="top center",
-            textfont=dict(color='#ff2244', size=11),
+            textfont=dict(color=BEAR_CANDLE, size=10, family="IBM Plex Mono"),
             name='SELL Signal',
         ), row=1, col=1)
 
@@ -136,61 +157,74 @@ def build_chart(df, ticker, interval, sr_levels, signals, market_struct, pattern
     avg_vol = np.mean(vols[-20:]) if n >= 20 else np.mean(vols)
     vol_colors = []
     for i in range(n):
-        if closes[i] >= opens[i]:
-            vol_colors.append('#00c896' if vols[i] > avg_vol else 'rgba(0,200,150,0.4)')
+        is_bull = closes[i] >= opens[i]
+        above_avg = vols[i] > avg_vol
+        if is_bull:
+            vol_colors.append(VOL_BULL if above_avg else VOL_BULL_DIM)
         else:
-            vol_colors.append('#ff4560' if vols[i] > avg_vol else 'rgba(255,69,96,0.4)')
+            vol_colors.append(VOL_BEAR if above_avg else VOL_BEAR_DIM)
 
     fig.add_trace(go.Bar(
         x=dates, y=vols,
         name="成交量",
         marker_color=vol_colors,
-        opacity=0.85,
     ), row=2, col=1)
 
-    # Volume average line
+    # Vol MA20
     fig.add_trace(go.Scatter(
         x=dates, y=[avg_vol] * n,
         name="Vol MA20",
-        line=dict(color='#f5a623', width=1, dash='dot'),
-        opacity=0.7,
+        line=dict(color=EMA50_COLOR, width=1.2, dash='dot'),
+        opacity=0.75,
     ), row=2, col=1)
 
-    # ── LAYOUT ───────────────────────────────────────────────────────────────
+    # ── LAYOUT（附件風格：白底，淺灰網格，柔和字體）────────────────────────────
     trend = market_struct.get('trend', '')
     trend_icon = "📈" if "多頭" in trend else ("📉" if "空頭" in trend else "⟷")
 
     fig.update_layout(
         title=dict(
-            text=f"{ticker} · {interval} · {trend_icon} {trend}",
-            font=dict(family="IBM Plex Mono", size=14, color="#e2e8f0"),
+            text=f"{ticker} &nbsp;·&nbsp; {interval} &nbsp;·&nbsp; {trend_icon} {trend}",
+            font=dict(family="Noto Sans TC", size=13, color=FONT_COLOR),
             x=0.01,
         ),
-        plot_bgcolor='#0d1117',
-        paper_bgcolor='#131720',
-        height=620,
-        margin=dict(l=60, r=80, t=50, b=20),
-        font=dict(family="IBM Plex Mono", color="#94a3b8", size=10),
+        plot_bgcolor=BG_PLOT,
+        paper_bgcolor=BG_PAPER,
+        height=600,
+        margin=dict(l=65, r=85, t=48, b=8),
+        font=dict(family="IBM Plex Mono", color=FONT_COLOR, size=10),
         legend=dict(
-            bgcolor='rgba(13,15,20,0.8)',
-            bordercolor='#2a3348',
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor=GRID_COLOR,
             borderwidth=1,
-            font=dict(size=9, color='#94a3b8'),
+            font=dict(size=9, color=FONT_COLOR),
+            orientation="h",
+            x=0, y=1.04,
         ),
         hovermode='x unified',
+        hoverlabel=dict(
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor=GRID_COLOR,
+            font=dict(family="IBM Plex Mono", size=10, color=FONT_COLOR),
+        ),
         xaxis_rangeslider_visible=False,
         dragmode='zoom',
     )
 
-    # Axes styling
-    axis_style = dict(
-        gridcolor='#1e2535',
-        zerolinecolor='#2a3348',
-        linecolor='#2a3348',
-        tickfont=dict(size=9, color='#94a3b8'),
+    # ── AXES ─────────────────────────────────────────────────────────────────
+    shared_axis = dict(
+        gridcolor=GRID_COLOR,
+        zerolinecolor=GRID_COLOR,
+        linecolor=GRID_COLOR,
+        tickfont=dict(size=9, color=AXIS_COLOR, family="IBM Plex Mono"),
+        showspikes=True,
+        spikecolor=AXIS_COLOR,
+        spikedash='dot',
+        spikethickness=1,
     )
-    fig.update_xaxes(**axis_style)
-    fig.update_yaxes(**axis_style)
+    fig.update_xaxes(**shared_axis)
+    fig.update_yaxes(**shared_axis)
     fig.update_yaxes(tickprefix='$', row=1, col=1)
+    fig.update_yaxes(title_text="成交量", title_font=dict(size=9, color=AXIS_COLOR), row=2, col=1)
 
     return fig
