@@ -27,7 +27,7 @@ section[data-testid="stSidebar"] *{color:var(--text)!important;}
 .bull{color:var(--bull);} .bear{color:var(--bear);} .gold{color:var(--gold);}
 .section-heading{font-size:.95rem;font-weight:700;color:var(--text);margin:1.3rem 0 .65rem;}
 .analysis-block{background:var(--card2);border:1px solid var(--border);border-left:3px solid var(--accent);
-  border-radius:0 8px 8px 0;padding:.9rem 1.1rem;font-size:.86rem;line-height:1.9;white-space:pre-wrap;}
+  border-radius:0 8px 8px 0;padding:1rem 1.2rem;font-size:.86rem;line-height:1.8;}
 .white-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1.1rem;margin-bottom:.65rem;}
 .info-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:.82rem;}
 .info-row:last-child{border-bottom:none;}
