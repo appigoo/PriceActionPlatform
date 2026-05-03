@@ -212,6 +212,7 @@ if "monitor_active"  not in st.session_state: st.session_state.monitor_active  =
 if "monitor_levels"  not in st.session_state: st.session_state.monitor_levels  = {}
 if "monitor_ticker"  not in st.session_state: st.session_state.monitor_ticker  = ""
 if "monitor_triggered" not in st.session_state: st.session_state.monitor_triggered = set()
+if "cached_result"    not in st.session_state: st.session_state.cached_result    = None
 
 # ─── SIDEBAR ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -305,7 +306,7 @@ def _score_bar(label, val, color):
 
 # ─── MAIN ANALYSIS ───────────────────────────────────────────────────────────────
 def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
-
+    """計算分析結果並存入 session_state，然後渲染"""
     with st.spinner("📡 正在獲取市場數據..."):
         df = fetch_ohlcv(ticker, interval, bar_count)
 
@@ -325,6 +326,38 @@ def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
             ticker, df, patterns, market_struct,
             volume_analysis, sr_levels, smart_money, signals, scores
         )
+
+    # ── 存入 session_state 快取（rerun 後不需重算）───────────────────────────
+    st.session_state.cached_result = {
+        "ticker": ticker, "interval": interval, "interval_label": interval_label,
+        "df": df, "patterns": patterns, "market_struct": market_struct,
+        "volume_analysis": volume_analysis, "sr_levels": sr_levels,
+        "smart_money": smart_money, "signals": signals,
+        "scores": scores, "ai_text": ai_text,
+        "tg_token": tg_token, "tg_chat_id": tg_chat_id,
+        "timestamp": datetime.now().strftime('%Y-%m-%d  %H:%M'),
+    }
+    st.session_state.last_analysis = {"ticker": ticker, "time": datetime.now()}
+
+    _render_result(st.session_state.cached_result)
+
+
+def _render_result(ctx):
+    """從快取 ctx 渲染完整分析介面（不重新計算）"""
+    ticker          = ctx["ticker"]
+    interval_label  = ctx["interval_label"]
+    df              = ctx["df"]
+    patterns        = ctx["patterns"]
+    market_struct   = ctx["market_struct"]
+    volume_analysis = ctx["volume_analysis"]
+    sr_levels       = ctx["sr_levels"]
+    smart_money     = ctx["smart_money"]
+    signals         = ctx["signals"]
+    scores          = ctx["scores"]
+    ai_text         = ctx["ai_text"]
+    tg_token        = ctx["tg_token"]
+    tg_chat_id      = ctx["tg_chat_id"]
+    interval        = ctx["interval"]
 
     # ── 數據快照 ─────────────────────────────────────────────────────────────
     latest    = df.iloc[-1]
@@ -594,9 +627,6 @@ def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
                 st.session_state.alert_sent_hash.add(msg_hash)
                 st.success("📱 Telegram 通知已發送")
 
-    st.session_state.last_analysis = {"ticker": ticker, "time": datetime.now()}
-
-
 # ─── 背景價位監控（每次 rerun 都執行）────────────────────────────────────────────
 def _run_price_monitor():
     """檢查當前價格是否觸及監控價位，觸及則發 Telegram"""
@@ -657,17 +687,24 @@ _run_price_monitor()
 
 # ─── ENTRY POINT ────────────────────────────────────────────────────────────────
 if analyze_btn:
+    # 新分析：重新計算並快取
     run_analysis(ticker_input, interval, bar_count, tg_token, tg_chat_id)
 
 elif refresh_sec > 0 and st.session_state.last_analysis:
+    # 自動刷新：重新分析
     time.sleep(refresh_sec)
     run_analysis(ticker_input, interval, bar_count, tg_token, tg_chat_id)
     st.rerun()
 
-elif st.session_state.monitor_active:
-    # 監控模式：即使沒有自動刷新，也每 30 秒輪詢一次價格
-    time.sleep(30)
-    st.rerun()
+elif st.session_state.cached_result is not None:
+    # ★ 有快取就直接渲染，不重新計算
+    # （按監控按鈕/停止監控/任何 rerun 都走這裡，介面不消失）
+    _render_result(st.session_state.cached_result)
+
+    # 監控模式輪詢
+    if st.session_state.monitor_active:
+        time.sleep(30)
+        st.rerun()
 
 else:
     st.markdown("""
