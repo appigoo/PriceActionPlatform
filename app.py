@@ -205,10 +205,13 @@ from analysis.telegram_bot import send_telegram_alert
 from charts.candlestick_chart import build_chart
 
 # ─── SESSION STATE ──────────────────────────────────────────────────────────────
-if "last_analysis" not in st.session_state:
-    st.session_state.last_analysis = None
-if "alert_sent_hash" not in st.session_state:
-    st.session_state.alert_sent_hash = set()
+if "last_analysis"   not in st.session_state: st.session_state.last_analysis   = None
+if "alert_sent_hash" not in st.session_state: st.session_state.alert_sent_hash = set()
+# 價位監控
+if "monitor_active"  not in st.session_state: st.session_state.monitor_active  = False
+if "monitor_levels"  not in st.session_state: st.session_state.monitor_levels  = {}
+if "monitor_ticker"  not in st.session_state: st.session_state.monitor_ticker  = ""
+if "monitor_triggered" not in st.session_state: st.session_state.monitor_triggered = set()
 
 # ─── SIDEBAR ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -251,6 +254,25 @@ with st.sidebar:
 
     st.markdown("---")
     analyze_btn = st.button("🔍 開始分析", use_container_width=True)
+
+    # 監控狀態指示
+    if st.session_state.monitor_active:
+        mon_ticker = st.session_state.monitor_ticker
+        mon_levels = st.session_state.monitor_levels
+        level_lines = "".join([
+            f"<div style='display:flex;justify-content:space-between;'>"
+            f"<span>{cfg["color"]} {lbl}</span>"
+            f"<span style='font-family:IBM Plex Mono,monospace;'>${cfg["price"]:.2f}</span></div>"
+            for lbl, cfg in mon_levels.items()
+        ])
+        triggered_ct = len(st.session_state.monitor_triggered)
+        st.markdown(f"""
+        <div style='background:#eaf4ee;border:1px solid #a8d5b8;border-radius:8px;
+                    padding:0.75rem;margin-bottom:0.75rem;font-size:0.75rem;color:#2d6a4f;'>
+          <div style='font-weight:700;margin-bottom:6px;'>🔔 監控中：{mon_ticker}</div>
+          {level_lines}
+          <div style='margin-top:6px;color:#6b6560;'>已觸發 {triggered_ct} 個提醒</div>
+        </div>""", unsafe_allow_html=True)
 
     st.markdown("""
     <div style='margin-top:1.5rem;font-size:0.62rem;color:#9e9890;line-height:1.7;'>
@@ -431,6 +453,51 @@ def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
           {_info_row("風報比",   trade.get('rrr','-'))}
         </div>""", unsafe_allow_html=True)
 
+        # ── 一鍵監控按鈕 ─────────────────────────────────────────────────────
+        _ks  = trade.get('key_support', 0)
+        _kr  = trade.get('key_resistance', 0)
+        _bp  = trade.get('breakout_level', 0)
+        _sl  = trade.get('stop_loss', 0)
+
+        # 監控狀態顯示
+        monitor_is_on = (st.session_state.monitor_active and
+                         st.session_state.monitor_ticker == ticker)
+
+        if monitor_is_on:
+            st.markdown(f"""
+            <div style='background:#eaf4ee;border:1.5px solid #3d8c5f;border-radius:8px;
+                        padding:0.7rem 1rem;margin-bottom:0.6rem;font-size:0.8rem;'>
+              <span style='color:#3d8c5f;font-weight:700;'>🔔 價位監控中</span>
+              <span style='color:#6b6560;margin-left:8px;font-family:IBM Plex Mono,monospace;'>
+                {ticker} · 支撐 ${_ks:.2f} / 阻力 ${_kr:.2f} / 突破 ${_bp:.2f} / 止損 ${_sl:.2f}
+              </span>
+            </div>""", unsafe_allow_html=True)
+            if st.button("⏹ 停止監控", use_container_width=True, key="stop_monitor"):
+                st.session_state.monitor_active    = False
+                st.session_state.monitor_levels    = {}
+                st.session_state.monitor_ticker    = ""
+                st.session_state.monitor_triggered = set()
+                st.rerun()
+        else:
+            btn_disabled = not (tg_token and tg_chat_id)
+            if st.button(
+                "🔔 一鍵監控價位" + ("（請先填 Telegram）" if btn_disabled else ""),
+                use_container_width=True,
+                key="start_monitor",
+                disabled=btn_disabled,
+            ):
+                st.session_state.monitor_active  = True
+                st.session_state.monitor_ticker  = ticker
+                st.session_state.monitor_triggered = set()
+                st.session_state.monitor_levels  = {
+                    "關鍵支撐":  {"price": _ks,  "direction": "below", "color": "🟢"},
+                    "關鍵阻力":  {"price": _kr,  "direction": "above", "color": "🔴"},
+                    "突破價位":  {"price": _bp,  "direction": "above", "color": "🚀"},
+                    "止損位":    {"price": _sl,  "direction": "below", "color": "🛑"},
+                }
+                st.success(f"✅ 已啟動監控！觸及價位將即時發送 Telegram 通知")
+                st.rerun()
+
         # Patterns
         st.markdown("<div class='section-heading'>🕯️ 辨識K線型態</div>", unsafe_allow_html=True)
         pills = ""
@@ -501,6 +568,12 @@ def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
         )
         st.plotly_chart(eq_fig, use_container_width=True)
 
+    # ─── 儲存 Telegram 憑據到 session state（供背景監控使用）────────────────
+    if tg_token:
+        st.session_state["_tg_token"] = tg_token
+    if tg_chat_id:
+        st.session_state["_tg_chat"] = tg_chat_id
+
     # ─── TELEGRAM ────────────────────────────────────────────────────────────
     if tg_token and tg_chat_id and sig in ('BUY', 'SELL'):
         msg_hash = hashlib.md5(
@@ -524,6 +597,64 @@ def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
     st.session_state.last_analysis = {"ticker": ticker, "time": datetime.now()}
 
 
+# ─── 背景價位監控（每次 rerun 都執行）────────────────────────────────────────────
+def _run_price_monitor():
+    """檢查當前價格是否觸及監控價位，觸及則發 Telegram"""
+    if not st.session_state.monitor_active:
+        return
+    if not st.session_state.monitor_levels:
+        return
+
+    ticker_m = st.session_state.monitor_ticker
+    tg_t = st.session_state.get("_tg_token", "")
+    tg_c = st.session_state.get("_tg_chat", "")
+    if not tg_t or not tg_c:
+        return
+
+    try:
+        import yfinance as yf
+        tk   = yf.Ticker(ticker_m)
+        info = tk.fast_info
+        cur  = float(info.last_price)
+    except Exception:
+        return
+
+    triggered_now = []
+    for label, cfg in st.session_state.monitor_levels.items():
+        level     = cfg["price"]
+        direction = cfg["direction"]   # "above" or "below"
+        icon      = cfg["color"]
+        key       = f"{label}_{level:.2f}"
+
+        if key in st.session_state.monitor_triggered:
+            continue   # 已通知過，不重複
+
+        hit = (direction == "above" and cur >= level) or               (direction == "below" and cur <= level)
+
+        if hit:
+            st.session_state.monitor_triggered.add(key)
+            triggered_now.append((label, level, cur, icon, direction))
+
+    if triggered_now:
+        from analysis.telegram_bot import send_telegram_alert
+        for label, level, cur_price, icon, direction in triggered_now:
+            arrow = "突破上方 ↑" if direction == "above" else "跌破下方 ↓"
+            msg = (
+                f"{icon} *{ticker_m} 價位觸及提醒*\n\n"
+                f"觸發：*{label}*\n"
+                f"監控價：${level:.2f}\n"
+                f"當前價：${cur_price:.2f}\n"
+                f"方向：{arrow}\n"
+                f"時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            send_telegram_alert(tg_t, tg_c, msg)
+
+        # 在頁面顯示觸發提示
+        for label, level, cur_price, icon, direction in triggered_now:
+            st.toast(f"{icon} {ticker_m} {label} ${level:.2f} 已觸及！Telegram 已發送", icon="🔔")
+
+_run_price_monitor()
+
 # ─── ENTRY POINT ────────────────────────────────────────────────────────────────
 if analyze_btn:
     run_analysis(ticker_input, interval, bar_count, tg_token, tg_chat_id)
@@ -531,6 +662,11 @@ if analyze_btn:
 elif refresh_sec > 0 and st.session_state.last_analysis:
     time.sleep(refresh_sec)
     run_analysis(ticker_input, interval, bar_count, tg_token, tg_chat_id)
+    st.rerun()
+
+elif st.session_state.monitor_active:
+    # 監控模式：即使沒有自動刷新，也每 30 秒輪詢一次價格
+    time.sleep(30)
     st.rerun()
 
 else:
