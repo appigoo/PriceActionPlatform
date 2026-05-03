@@ -252,15 +252,26 @@ def detect_all_patterns(df: pd.DataFrame) -> dict:
 
     # 展示策略：優先顯示最近 30 根 bar 的型態，補充更早的背景型態最多 5 個
     recent_cutoff = n - 30
-    recent = [p for p in unique if p['bar'] >= recent_cutoff]
-    older  = [p for p in unique if p['bar'] <  recent_cutoff][-5:]
-    final  = sorted(older + recent, key=lambda x: x['bar'])
+    recent = [p for p in unique if p["bar"] >= recent_cutoff]
+    older  = [p for p in unique if p["bar"] <  recent_cutoff][-5:]
+    final  = sorted(older + recent, key=lambda x: x["bar"])
 
-    bull_ct = sum(1 for p in unique if p['bias'] == 'bull')
-    bear_ct = sum(1 for p in unique if p['bias'] == 'bear')
+    # ── 最終強制去重：同一型態名稱只保留最新一筆（鐵底線）──────────────────
+    seen_final: dict = {}
+    final_deduped = []
+    for p in final:                         # 已按 bar 升序
+        pname = p["name"]
+        if pname in seen_final:
+            final_deduped[seen_final[pname]] = p  # 覆蓋為更新的
+        else:
+            seen_final[pname] = len(final_deduped)
+            final_deduped.append(p)
+
+    bull_ct = sum(1 for p in unique if p["bias"] == "bull")
+    bear_ct = sum(1 for p in unique if p["bias"] == "bear")
 
     return {
-        "detected": final[-20:],
+        "detected": final_deduped[-20:],
         "bull_count": bull_ct,
         "bear_count": bear_ct,
         "all": unique,
