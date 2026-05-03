@@ -157,7 +157,8 @@ def detect_all_patterns(df: pd.DataFrame) -> dict:
             detected.append({"index": i, "name": "黃昏星 🌙", "bias": "bear", "bar": i,
                              "desc": "黃昏星：大陽線→小實體→大陰線，頂部反轉強訊號，主力出貨完成"})
 
-    # 紅三兵（需要連續 3+ 根）
+    # ── 紅三兵：收集所有觸發 bar，每連續段只保留最後一根 ──────────────────
+    _s_bars = []
     for i in range(4, n):
         t1, t2, t3 = df.iloc[i-2], df.iloc[i-1], df.iloc[i]
         if (all(_is_bull(x) for x in [t1, t2, t3]) and
@@ -166,10 +167,13 @@ def detect_all_patterns(df: pd.DataFrame) -> dict:
                 _body(t1) > _rng(t1) * 0.4 and
                 _body(t2) > _rng(t2) * 0.4 and
                 _body(t3) > _rng(t3) * 0.4):
-            detected.append({"index": i, "name": "紅三兵 🪖", "bias": "bull", "bar": i,
-                             "desc": "紅三兵：三連陽且依次遞增，主力資金持續進場，強勢多頭延續確認"})
+            _s_bars.append(i)
+    for bar in _dedupe_consecutive(_s_bars):
+        detected.append({"index": bar, "name": "紅三兵 🪖", "bias": "bull", "bar": bar,
+                         "desc": "紅三兵：三連陽且依次遞增，主力資金持續進場，強勢多頭延續確認"})
 
-    # 三隻烏鴉
+    # ── 三隻烏鴉：同上，每連續段只保留最後一根 ────────────────────────────
+    _c_bars = []
     for i in range(4, n):
         t1, t2, t3 = df.iloc[i-2], df.iloc[i-1], df.iloc[i]
         if (all(_is_bear(x) for x in [t1, t2, t3]) and
@@ -177,56 +181,107 @@ def detect_all_patterns(df: pd.DataFrame) -> dict:
                 t2['Open'] < t1['Open'] and t3['Open'] < t2['Open'] and
                 _body(t1) > _rng(t1) * 0.4 and
                 _body(t2) > _rng(t2) * 0.4):
-            detected.append({"index": i, "name": "三隻烏鴉 🐦‍⬛", "bias": "bear", "bar": i,
-                             "desc": "三隻烏鴉：三連陰且依次遞減，空方全面主導，下跌趨勢加速"})
+            _c_bars.append(i)
+    for bar in _dedupe_consecutive(_c_bars):
+        detected.append({"index": bar, "name": "三隻烏鴉 🐦‍⬛", "bias": "bear", "bar": bar,
+                         "desc": "三隻烏鴉：三連陰且依次遞減，空方全面主導，下跌趨勢加速"})
 
-    # 上升三法
+    # ── 上升三法 ───────────────────────────────────────────────────────────
+    _r3_bars = []
     for i in range(6, n):
-        big1 = df.iloc[i-4]
+        big1   = df.iloc[i-4]
         smalls = [df.iloc[i-3], df.iloc[i-2], df.iloc[i-1]]
-        big2 = df.iloc[i]
+        big2   = df.iloc[i]
         if (_is_bull(big1) and _body(big1) > _rng(big1) * 0.5 and
                 all(_is_bear(s) for s in smalls) and
                 all(s['Close'] > big1['Open'] for s in smalls) and
                 all(s['High'] < big1['Close'] for s in smalls) and
                 _is_bull(big2) and big2['Close'] > big1['Close']):
-            detected.append({"index": i, "name": "上升三法 📶", "bias": "bull", "bar": i,
-                             "desc": "上升三法：大陽線後三根小陰線整理，再次大陽突破，主升段延續確認"})
+            _r3_bars.append(i)
+    for bar in _dedupe_consecutive(_r3_bars):
+        detected.append({"index": bar, "name": "上升三法 📶", "bias": "bull", "bar": bar,
+                         "desc": "上升三法：大陽線後三根小陰線整理，再次大陽突破，主升段延續確認"})
 
-    # 下跌三法
+    # ── 下跌三法 ───────────────────────────────────────────────────────────
+    _f3_bars = []
     for i in range(6, n):
-        big1 = df.iloc[i-4]
+        big1   = df.iloc[i-4]
         smalls = [df.iloc[i-3], df.iloc[i-2], df.iloc[i-1]]
-        big2 = df.iloc[i]
+        big2   = df.iloc[i]
         if (_is_bear(big1) and _body(big1) > _rng(big1) * 0.5 and
                 all(_is_bull(s) for s in smalls) and
                 all(s['Close'] < big1['Open'] for s in smalls) and
                 all(s['Low'] > big1['Close'] for s in smalls) and
                 _is_bear(big2) and big2['Close'] < big1['Close']):
-            detected.append({"index": i, "name": "下跌三法 📉", "bias": "bear", "bar": i,
-                             "desc": "下跌三法：大陰線後三根小陽線反彈，再次大陰突破，主跌段延續確認"})
+            _f3_bars.append(i)
+    for bar in _dedupe_consecutive(_f3_bars):
+        detected.append({"index": bar, "name": "下跌三法 📉", "bias": "bear", "bar": bar,
+                         "desc": "下跌三法：大陰線後三根小陽線反彈，再次大陰突破，主跌段延續確認"})
 
     # ── 4. 型態學（Macro Patterns）──────────────────────────────────────────
     macro = _detect_macro_patterns(df)
     detected.extend(macro)
 
-    # 去重
-    seen, unique = set(), []
-    for p in detected:
-        key = (p['bar'], p['name'][:6])
-        if key not in seen:
-            seen.add(key)
-            unique.append(p)
+    # ── 去重（修正版）────────────────────────────────────────────────────────
+    # 同一型態名稱在 8 根 bar 內只保留最新一次；跨越 8 根以上才算新的同型態
+    name_last_bar: dict = {}
+    name_last_idx: dict = {}
+    unique_map: dict = {}  # name+cluster_key -> pattern
+
+    sorted_detected = sorted(detected, key=lambda x: x['bar'])
+    for p in sorted_detected:
+        pname = p['name']
+        last  = name_last_bar.get(pname, -999)
+        if p['bar'] - last >= 8:
+            # 新的獨立出現
+            cluster_key = f"{pname}_{p['bar']}"
+            name_last_bar[pname] = p['bar']
+            name_last_idx[pname] = cluster_key
+            unique_map[cluster_key] = p
+        else:
+            # 同一連續段：更新為最新 bar
+            old_key = name_last_idx[pname]
+            new_key = f"{pname}_{p['bar']}"
+            if old_key in unique_map:
+                del unique_map[old_key]
+            unique_map[new_key] = p
+            name_last_bar[pname] = p['bar']
+            name_last_idx[pname] = new_key
+
+    unique = sorted(unique_map.values(), key=lambda x: x['bar'])
+
+    # 展示策略：優先顯示最近 30 根 bar 的型態，補充更早的背景型態最多 5 個
+    recent_cutoff = n - 30
+    recent = [p for p in unique if p['bar'] >= recent_cutoff]
+    older  = [p for p in unique if p['bar'] <  recent_cutoff][-5:]
+    final  = sorted(older + recent, key=lambda x: x['bar'])
 
     bull_ct = sum(1 for p in unique if p['bias'] == 'bull')
     bear_ct = sum(1 for p in unique if p['bias'] == 'bear')
 
     return {
-        "detected": unique[-20:],
+        "detected": final[-20:],
         "bull_count": bull_ct,
         "bear_count": bear_ct,
         "all": unique,
     }
+
+
+def _dedupe_consecutive(bars: list, gap: int = 3) -> list:
+    """
+    從一列連續觸發的 bar index 中，找出各「連續段」，每段只保留最後一根。
+    例如 [5,6,7,12,13,20] → [7, 13, 20]
+    """
+    if not bars:
+        return []
+    result = []
+    prev = bars[0]
+    for b in bars[1:]:
+        if b - prev > gap:
+            result.append(prev)  # 前一段的最後一根
+        prev = b
+    result.append(prev)  # 最後一段
+    return result
 
 
 def _detect_macro_patterns(df: pd.DataFrame) -> list:
