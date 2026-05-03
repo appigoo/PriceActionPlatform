@@ -187,13 +187,13 @@ def generate_signals(df, patterns, market_struct, volume_analysis, sr_levels) ->
     mid_dir = ("多頭 ▲" if "多頭" in macro_trend
                else ("空頭 ▼" if "空頭" in macro_trend else "中性 ⟷"))
 
-    # ── 10. W底 / 頭肩底目標位 ────────────────────────────────────────────
+    # ── 10. W底 / 頭肩底目標位（從 macro 型態取）────────────────────────────
     macro_targets = []
-    for p in detected:
+    for p in patterns.get('macro', []):
         if p.get('target'):
             macro_targets.append({
-                "pattern": p['name'],
-                "target":  p['target'],
+                "pattern":  p['name'],
+                "target":   p['target'],
                 "neckline": p.get('neckline', 0),
             })
 
