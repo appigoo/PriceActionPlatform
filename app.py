@@ -234,12 +234,17 @@ def render_ticker(ctx: dict):
     mon_on   = st.session_state.monitors.get(ticker, {}).get("active", False)
 
     # header
-    st.markdown(f"""<div style='display:flex;align-items:baseline;gap:10px;padding:.3rem 0 .8rem'>
-      <span style='font-family:IBM Plex Mono,monospace;font-size:1.6rem;font-weight:700'>{ticker}</span>
-      <span style='font-size:.7rem;color:#9e9890'>{interval_label} · SMC + Price Action</span>
-      {'<span class="mon-badge">🔔 監控中</span>' if mon_on else ''}
-      <span style='margin-left:auto;font-size:.66rem;color:#b8b2aa;font-family:IBM Plex Mono,monospace'>{ctx["timestamp"]}</span>
-    </div>""", unsafe_allow_html=True)
+    ts = ctx['timestamp']
+    mon_badge_html = '<span class="mon-badge">🔔 監控中</span>' if mon_on else ''
+    st.markdown(
+        f"<div style='display:flex;align-items:baseline;gap:10px;padding:.3rem 0 .8rem'>"
+        f"<span style='font-family:IBM Plex Mono,monospace;font-size:1.6rem;font-weight:700'>{ticker}</span>"
+        f"<span style='font-size:.7rem;color:#9e9890;margin-left:8px'>{interval_label} · SMC + Price Action</span>"
+        f"{mon_badge_html}"
+        f"<span style='margin-left:auto;font-size:.66rem;color:#b8b2aa;font-family:IBM Plex Mono,monospace'>{ts}</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     # metric cards
     c1,c2,c3,c4,c5 = st.columns(5)
@@ -493,21 +498,7 @@ if analyze_all:
     progress.empty()
     st.rerun()
 
-# 個別分析按鈕行
-btn_cols = st.columns(min(len(stock_list), 6))
-for i, tk in enumerate(stock_list[:6]):
-    with btn_cols[i]:
-        cached_ok = tk in st.session_state.cached
-        mon_on    = st.session_state.monitors.get(tk,{}).get("active",False)
-        label     = f"{'🔔 ' if mon_on else ''}{'✓ ' if cached_ok else ''}{tk}"
-        if st.button(label, use_container_width=True, key=f"single_{tk}"):
-            with st.spinner(f"分析 {tk}..."):
-                result = compute_ticker(tk)
-            if result:
-                st.session_state.cached[tk] = result
-            else:
-                st.error(f"❌ {tk} 數據獲取失敗")
-            st.rerun()
+# 個別分析按鈕：放在 Tab 內部，由 render_ticker 處理
 
 # Tabs
 tab_labels = []
@@ -523,12 +514,23 @@ for tab, tk in zip(tabs, stock_list):
         if tk in st.session_state.cached:
             render_ticker(st.session_state.cached[tk])
         else:
-            st.markdown(f"""<div style='text-align:center;padding:4rem 2rem;color:#b8b2aa'>
-              <div style='font-size:2rem;margin-bottom:.8rem;color:#ccc8be'>◈</div>
-              <div style='font-size:.9rem;color:#9e9890'>{tk} 尚未分析</div>
-              <div style='font-size:.75rem;margin-top:.4rem;color:#b8b2aa'>
-                點擊上方「{tk}」按鈕 或 「🔍 分析全部股票」</div>
-            </div>""", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='text-align:center;padding:3rem 2rem;color:#b8b2aa'>"
+                f"<div style='font-size:2rem;margin-bottom:.8rem;color:#ccc8be'>◈</div>"
+                f"<div style='font-size:.9rem;color:#9e9890'>{tk} 尚未分析</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+            c_btn = st.columns([1, 2, 1])
+            with c_btn[1]:
+                if st.button(f"🔍 分析 {tk}", use_container_width=True, key=f"single_{tk}"):
+                    with st.spinner(f"正在分析 {tk}..."):
+                        result = compute_ticker(tk)
+                    if result:
+                        st.session_state.cached[tk] = result
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {tk} 數據獲取失敗，請確認代號是否正確")
 
 # 自動刷新
 if refresh_sec > 0 and st.session_state.cached:
