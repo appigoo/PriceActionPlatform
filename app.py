@@ -83,6 +83,63 @@ _ss("alert_hashes",  set())
 _ss("active_tab",    0)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+import re as _re
+
+def _strip_html(html: str) -> str:
+    text = _re.sub('<br/?>', chr(10), html)
+    text = _re.sub('<[^>]+>', '', text)
+    lines = [l for l in text.split(chr(10)) if l.strip()]
+    return chr(10).join(lines).strip()
+
+def _build_tg_signal_msg(ticker, sig, trend, overall, patterns,
+                          signals, volume_analysis, market_struct) -> str:
+    sig_icon = "🟢 BUY 做多" if sig == "BUY" else "🔴 SELL 做空"
+    all_pats = (patterns.get('single_k',[]) + patterns.get('double_k',[]) +
+                patterns.get('triple_k',[]) + patterns.get('macro',[]))
+    vol_sig = volume_analysis.get('vol_signal', '-')
+    vol_r   = volume_analysis.get('vol_ratio', 1.0)
+    trade   = signals.get('trade_setup', {})
+    ks  = trade.get('key_support', 0)
+    kr  = trade.get('key_resistance', 0)
+    sl  = trade.get('stop_loss', 0)
+    rrr = trade.get('rrr', 'N/A')
+    swing    = market_struct.get('swing_desc', '-')
+    reversal = _strip_html(market_struct.get('reversal_signal', ''))
+    sk = patterns.get('single_k',[{}])[0].get('name','-') if patterns.get('single_k') else '-'
+    dk = patterns.get('double_k',[{}])[0].get('name','-') if patterns.get('double_k') else '-'
+    tk = patterns.get('triple_k',[{}])[0].get('name','-') if patterns.get('triple_k') else '-'
+    sep = chr(10) + chr(8212)*14 + chr(10)
+    nl  = chr(10)
+    lines = [
+        "🚨 *" + ticker + " 交易訊號*",
+        chr(8212)*14,
+        "訊號：*" + sig_icon + "*",
+        "評級：" + overall,
+        "趨勢：" + trend + "（" + swing + "）",
+    ]
+    if reversal:
+        lines.append("⚠️ " + reversal)
+    lines += [
+        "",
+        "📐 *型態識別*",
+        "• 單K：" + sk,
+        "• 雙K：" + dk,
+        "• 多K：" + tk,
+        "",
+        "📦 *成交量*",
+        "• " + vol_sig + "（" + str(round(vol_r,1)) + "x均量）",
+        "",
+        "💰 *交易建議*",
+        "• 支撐：$" + str(round(ks,2)),
+        "• 阻力：$" + str(round(kr,2)),
+        "• 止損：$" + str(round(sl,2)),
+        "• 風報比：" + str(rrr),
+        chr(8212)*14,
+        "_SMC Pro · " + __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M') + "_",
+    ]
+    return nl.join(lines)
+
+
 def _cc(val):
     sv = str(val)
     if any(k in sv for k in ("多頭","突破","吸籌","放量","低位","看多","看漲")): return "bull"
@@ -434,14 +491,12 @@ def render_ticker(ctx: dict):
             yaxis=dict(gridcolor='#ede9e3',tickfont=dict(size=8,color='#9e9890')))
         st.plotly_chart(efig, use_container_width=True)
 
-    # Telegram signal alert (BUY/SELL)
+    # Telegram signal alert (BUY/SELL) - 純文字格式，無 HTML
     if tg_token and tg_chat_id and sig in ('BUY','SELL'):
         h = hashlib.md5(f"{ticker}{interval}{sig}{datetime.now().strftime('%Y%m%d%H')}".encode()).hexdigest()
         if h not in st.session_state.alert_hashes:
-            names = ', '.join([p['name'] for p in all_pats[:3]]) or '無'
-            msg = (f"🚨 *{ticker} 交易訊號*\n\n"
-                   f"訊號：{'🟢 BUY' if sig=='BUY' else '🔴 SELL'}\n"
-                   f"趨勢：{trend}\n型態：{names}\n評級：{overall}\n\n{ai_text[:300]}...")
+            msg = _build_tg_signal_msg(ticker, sig, trend, overall, patterns,
+                                        signals, volume_analysis, market_struct)
             if send_telegram_alert(tg_token, tg_chat_id, msg):
                 st.session_state.alert_hashes.add(h)
                 st.success(f"📱 {ticker} Telegram 訊號已發送")
