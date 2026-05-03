@@ -82,21 +82,17 @@ def generate_signals(df, patterns, market_struct, volume_analysis, sr_levels) ->
         sell_score += 20
         sell_reasons.append("放量下跌")
 
-    # ── 4. K線型態得分（只計算最新 10 根 bar 的型態）──────────────────────
-    detected = patterns.get('detected', [])
-    n_bars   = len(closes)
-    # 只取最新 10 根 bar 內的型態（macro 型態如 W底例外，可來自更早）
-    macro_names = {"頭肩底", "W底型態", "頭肩頂", "M頂型態"}
-    recent_patterns = [
-        p for p in detected
-        if p.get('bar', 0) >= n_bars - 10
-        or any(k in p['name'] for k in macro_names)
-    ]
-
+    # ── 4. K線型態得分（精確位置：單K=-1根，雙K=-2~-1根，三K=-5~-1根）────
+    # 直接用已分類好的 single_k / double_k / triple_k / macro
     high_weight_bull = {"啟明星", "多頭吞噬", "紅三兵", "穿刺線", "頭肩底", "W底型態", "上升三法"}
     high_weight_bear = {"黃昏星", "空頭吞噬", "三隻烏鴉", "烏雲蓋頂", "頭肩頂", "M頂型態", "下跌三法"}
 
-    for p in recent_patterns:
+    all_scored = (patterns.get('single_k', []) +
+                  patterns.get('double_k', []) +
+                  patterns.get('triple_k', []) +
+                  patterns.get('macro', []))
+
+    for p in all_scored:
         pname = p['name']
         if p['bias'] == 'bull':
             weight = 15 if any(k in pname for k in high_weight_bull) else 8
