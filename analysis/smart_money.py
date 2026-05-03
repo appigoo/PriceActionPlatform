@@ -1,115 +1,201 @@
-"""Smart Money Concept (SMC) Analysis"""
-import pandas as pd
+"""
+Smart Money Concept (SMC) 主力行為分析
+流動性清洗、Stop Hunt、吸籌、派發、假突破、爆量洗盤
+"""
 import numpy as np
+import pandas as pd
 
 
 def analyze_smart_money(df: pd.DataFrame, vol_analysis: dict) -> dict:
     closes = df['Close'].values
-    opens = df['Open'].values
-    highs = df['High'].values
-    lows = df['Low'].values
-    vols = df['Volume'].values
+    opens  = df['Open'].values
+    highs  = df['High'].values
+    lows   = df['Low'].values
+    vols   = df['Volume'].values
     n = len(df)
 
-    avg_vol = np.mean(vols[-20:]) if n >= 20 else np.mean(vols)
-    current = closes[-1]
-    mean_20 = np.mean(closes[-20:]) if n >= 20 else np.mean(closes)
+    avg_vol  = np.mean(vols[-20:]) if n >= 20 else np.mean(vols)
+    mean_20  = np.mean(closes[-20:]) if n >= 20 else np.mean(closes)
+    mean_50  = np.mean(closes[-50:]) if n >= 50 else np.mean(closes)
+    current  = closes[-1]
+    vol_r    = vols[-1] / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Liquidity Grab Detection ─────────────────────────────────────────────
-    # Fake breakdown: price broke below recent low then recovered
-    recent_low_5 = min(lows[-6:-1]) if n >= 6 else lows[0]
+    # ── 流動性清洗（Liquidity Grab）─────────────────────────────────────────
     liquidity_grab = "無"
+    lg_desc = ""
+
+    # 向下流動性清洗：跌破前5根低點後收回
+    recent_low_5 = min(lows[-6:-1]) if n >= 6 else lows[0]
+    recent_high_5 = max(highs[-6:-1]) if n >= 6 else highs[0]
+
     if lows[-1] < recent_low_5 and closes[-1] > recent_low_5:
-        liquidity_grab = "疑似下方流動性清洗 ↓↑"
-    elif highs[-1] > max(highs[-6:-1]) and closes[-1] < max(highs[-6:-1]) if n >= 6 else False:
-        liquidity_grab = "疑似上方流動性清洗 ↑↓"
+        grab_depth = (recent_low_5 - lows[-1]) / recent_low_5 * 100
+        liquidity_grab = f"下方流動性清洗 ↓↑ ({grab_depth:.1f}%)"
+        lg_desc = (f"價格跌破前低 ${recent_low_5:.2f}，觸及 ${lows[-1]:.2f}（向下 {grab_depth:.1f}%）後快速收回，"
+                   f"伴隨成交量 {vol_r:.1f}x 均量。典型主力掃除下方止損單後吸籌行為。")
 
-    # ── Stop Hunt ────────────────────────────────────────────────────────────
+    elif highs[-1] > recent_high_5 and closes[-1] < recent_high_5:
+        grab_depth = (highs[-1] - recent_high_5) / recent_high_5 * 100
+        liquidity_grab = f"上方流動性清洗 ↑↓ ({grab_depth:.1f}%)"
+        lg_desc = (f"價格突破前高 ${recent_high_5:.2f}，觸及 ${highs[-1]:.2f}（向上 {grab_depth:.1f}%）後快速回落，"
+                   f"主力誘多吸引追漲後打壓出貨。")
+
+    # ── Stop Hunt 偵測 ────────────────────────────────────────────────────
     stop_hunt = False
-    if n >= 3:
-        range_before = highs[-3] - lows[-3]
-        if (lows[-1] < lows[-2] - range_before * 0.3 and
-                closes[-1] > lows[-2]):
+    stop_hunt_desc = ""
+    if n >= 4:
+        # 跌破前2根所有低點後反彈超過前低
+        prev_lows = [lows[i] for i in range(n-4, n-1)]
+        if lows[-1] < min(prev_lows) and closes[-1] > np.mean(prev_lows):
             stop_hunt = True
+            stop_hunt_desc = (f"偵測到 Stop Hunt：價格瞬間跌破 ${min(prev_lows):.2f} 觸發止損，"
+                              f"但隨即強力拉回至 ${closes[-1]:.2f}，主力洗盤後重新拉升。")
 
-    # ── Accumulation Probability ─────────────────────────────────────────────
-    accum_score = 0
-    # Low position
-    if current < mean_20: accum_score += 25
-    # Volume with bullish close
-    if vols[-1] > avg_vol and closes[-1] > opens[-1]: accum_score += 25
-    # Lower shadow
+    # ── 吸籌概率 ──────────────────────────────────────────────────────────
+    accum = 0
+    accum_factors = []
+
+    if current < mean_20:
+        accum += 20
+        accum_factors.append("低於20日均價（低位）")
+    if current < mean_50:
+        accum += 10
+        accum_factors.append("低於50日均價（深度低位）")
+    if vols[-1] > avg_vol * 1.2 and closes[-1] > opens[-1]:
+        accum += 25
+        accum_factors.append(f"放量陽線（{vol_r:.1f}x均量）")
     lower_shadow = min(closes[-1], opens[-1]) - lows[-1]
     body = abs(closes[-1] - opens[-1])
-    if lower_shadow > body: accum_score += 20
-    # Liquidity grab
-    if "下方" in liquidity_grab: accum_score += 30
+    if lower_shadow > body * 1.5:
+        accum += 20
+        accum_factors.append("長下影承接")
+    if "下方" in liquidity_grab:
+        accum += 25
+        accum_factors.append("流動性清洗後收回")
+    if stop_hunt:
+        accum += 15
+        accum_factors.append("Stop Hunt 後反彈")
+    # 連續縮量整理後放量
+    if n >= 5 and vols[-1] > avg_vol * 1.5 and np.mean(vols[-5:-1]) < avg_vol * 0.8:
+        accum += 15
+        accum_factors.append("縮量整理後突然放量")
 
-    # ── Distribution Risk ────────────────────────────────────────────────────
-    dist_score = 0
-    if current > mean_20: dist_score += 25
-    if vols[-1] > avg_vol * 1.5 and closes[-1] < opens[-1]: dist_score += 30
+    accum = min(accum, 100)
+
+    # ── 派發風險 ──────────────────────────────────────────────────────────
+    dist = 0
+    dist_factors = []
+
+    if current > mean_20 * 1.05:
+        dist += 20
+        dist_factors.append("高於20日均價5%以上（高位）")
+    if vols[-1] > avg_vol * 1.5 and closes[-1] < opens[-1]:
+        dist += 30
+        dist_factors.append(f"高位放量陰線（{vol_r:.1f}x均量）")
     upper_shadow = highs[-1] - max(closes[-1], opens[-1])
-    if upper_shadow > body: dist_score += 25
-    if "上方" in liquidity_grab: dist_score += 20
+    if upper_shadow > body * 1.5 and vols[-1] > avg_vol:
+        dist += 25
+        dist_factors.append("放量長上影（主力誘多出貨）")
+    if "上方" in liquidity_grab:
+        dist += 25
+        dist_factors.append("上方流動性清洗")
+    if n >= 3:
+        # 高位連續縮量但價格未跌：籌碼鎖定完成，準備出貨
+        if current > mean_20 and all(vols[i] < avg_vol * 0.7 for i in range(n-3, n)):
+            dist += 10
+            dist_factors.append("高位持續縮量（籌碼鎖定完成）")
 
-    accum_score = min(accum_score, 100)
-    dist_score = min(dist_score, 100)
+    dist = min(dist, 100)
 
-    # ── Behavior Classification ───────────────────────────────────────────────
-    if accum_score > 70:
+    # ── 行為分類 ──────────────────────────────────────────────────────────
+    if accum >= 70:
         behavior = "主力吸籌"
         fakeout_risk = "低"
-    elif dist_score > 70:
+    elif dist >= 70:
         behavior = "主力派發"
         fakeout_risk = "高"
     elif stop_hunt:
-        behavior = "Stop Hunt"
+        behavior = "Stop Hunt / 主力洗盤"
         fakeout_risk = "中"
     elif "清洗" in liquidity_grab:
         behavior = "流動性清洗"
         fakeout_risk = "中"
-    elif vols[-1] > avg_vol * 2.5:
-        behavior = "爆量異動"
+    elif vol_r > 2.5:
+        behavior = "爆量異動（方向待確認）"
         fakeout_risk = "中"
+    elif accum > dist and accum > 30:
+        behavior = "疑似吸籌"
+        fakeout_risk = "低至中"
+    elif dist > accum and dist > 30:
+        behavior = "疑似派發"
+        fakeout_risk = "中至高"
     else:
-        behavior = "正常波動"
+        behavior = "正常市場波動"
         fakeout_risk = "低"
 
-    # ── Natural Language Description ─────────────────────────────────────────
-    desc = _build_description(behavior, liquidity_grab, vol_analysis, current, mean_20)
+    # ── 自然語言描述（對齊專業分析師報告）──────────────────────────────────
+    description = _build_description(
+        behavior, liquidity_grab, lg_desc,
+        stop_hunt, stop_hunt_desc,
+        accum, accum_factors,
+        dist, dist_factors,
+        vol_analysis, vol_r, current, mean_20
+    )
 
     return {
-        "behavior": behavior,
-        "accumulation_prob": accum_score,
-        "distribution_risk": dist_score,
-        "liquidity_grab": liquidity_grab,
-        "stop_hunt": "是" if stop_hunt else "否",
-        "fakeout_risk": fakeout_risk,
-        "description": desc,
+        "behavior":          behavior,
+        "accumulation_prob": accum,
+        "distribution_risk": dist,
+        "liquidity_grab":    liquidity_grab,
+        "stop_hunt":         "是 ⚠️" if stop_hunt else "否",
+        "fakeout_risk":      fakeout_risk,
+        "description":       description,
+        "accum_factors":     accum_factors,
+        "dist_factors":      dist_factors,
+        "lg_desc":           lg_desc,
+        "stop_hunt_desc":    stop_hunt_desc,
     }
 
 
-def _build_description(behavior, liquidity_grab, vol_analysis, current, mean20):
-    desc_parts = []
+def _build_description(behavior, liquidity_grab, lg_desc,
+                        stop_hunt, stop_hunt_desc,
+                        accum, accum_factors,
+                        dist, dist_factors,
+                        vol_analysis, vol_r, current, mean20):
+    parts = []
 
+    # 核心行為描述
     if behavior == "主力吸籌":
-        desc_parts.append("價格處於低位，出現放量多頭K線，主力資金跡象明顯進場吸籌。")
+        parts.append(
+            f"主力吸籌訊號明確（吸籌概率 {accum}%）。"
+            f"確認因素：{' / '.join(accum_factors[:4])}。"
+        )
     elif behavior == "主力派發":
-        desc_parts.append("高位出現大量拋壓，爆量陰線顯示主力派發風險升高，建議謹慎追高。")
-    elif behavior == "Stop Hunt":
-        desc_parts.append("價格短暫跌破近期低點後迅速拉回，疑似主力掃除止損單後重新吸籌。")
-    elif behavior == "流動性清洗":
-        if "下方" in liquidity_grab:
-            desc_parts.append("價格跌破前低後快速收回，伴隨爆量長下影，疑似主力進行流動性清洗後吸籌。")
-        else:
-            desc_parts.append("價格假突破前高後迅速回落，疑似主力誘多後打壓出貨。")
-    elif behavior == "爆量異動":
-        desc_parts.append(f"成交量異常放大至均量 {vol_analysis.get('vol_ratio', 0):.1f} 倍，市場出現重大資金異動，方向待確認。")
-    else:
-        desc_parts.append("目前無明顯主力異常行為，市場處於正常波動狀態。")
+        parts.append(
+            f"主力派發風險高（派發風險 {dist}%）。"
+            f"警示因素：{' / '.join(dist_factors[:4])}。"
+        )
+    elif behavior == "Stop Hunt / 主力洗盤":
+        parts.append(stop_hunt_desc)
+    elif behavior in ("疑似吸籌",):
+        parts.append(f"疑似主力吸籌（概率 {accum}%），但確認度不足，需更多K線驗證。")
+    elif behavior in ("疑似派發",):
+        parts.append(f"疑似主力派發（風險 {dist}%），建議謹慎，等待確認。")
 
-    if vol_analysis.get('extra_signal'):
-        desc_parts.append(vol_analysis['extra_signal'])
+    # 流動性清洗補充
+    if lg_desc:
+        parts.append(lg_desc)
 
-    return " ".join(desc_parts)
+    # 成交量異動補充
+    extra = vol_analysis.get('extra_signal', '')
+    if extra:
+        parts.append(extra)
+
+    # 如果無明顯異動
+    if not parts:
+        parts.append(
+            "目前無明顯主力異常行為，市場屬正常波動。"
+            f"成交量維持 {vol_r:.1f}x 均量水平，方向性不明確，建議等待明確訊號。"
+        )
+
+    return " ".join(parts)
