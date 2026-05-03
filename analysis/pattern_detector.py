@@ -250,11 +250,16 @@ def detect_all_patterns(df: pd.DataFrame) -> dict:
 
     unique = sorted(unique_map.values(), key=lambda x: x['bar'])
 
-    # 展示策略：優先顯示最近 30 根 bar 的型態，補充更早的背景型態最多 5 個
-    recent_cutoff = n - 30
+    # 展示策略：只顯示最新 10 根 bar 的型態（集中分析最新市場狀態）
+    # 型態學（W底/頭肩底等長期結構）額外保留最多 3 個作背景參考
+    RECENT_BARS = 10
+    recent_cutoff = n - RECENT_BARS
     recent = [p for p in unique if p["bar"] >= recent_cutoff]
-    older  = [p for p in unique if p["bar"] <  recent_cutoff][-5:]
-    final  = sorted(older + recent, key=lambda x: x["bar"])
+    macro_names = {"W底型態 📐", "M頂型態 📐", "頭肩底 🔔", "頭肩頂 🔔",
+                   "對稱三角收斂 △", "上升三角 △↑", "下降三角 △↓"}
+    macro_bg = [p for p in unique if p["bar"] < recent_cutoff
+                and p["name"] in macro_names][-3:]
+    final = sorted(macro_bg + recent, key=lambda x: x["bar"])
 
     # ── 最終強制去重：同一型態名稱只保留最新一筆（鐵底線）──────────────────
     seen_final: dict = {}
