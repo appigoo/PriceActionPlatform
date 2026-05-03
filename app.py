@@ -444,12 +444,18 @@ def run_analysis(ticker, interval, bar_count, tg_token, tg_chat_id):
                     unsafe_allow_html=True)
 
         # Volume
-        st.markdown("<div class='section-heading'>📦 成交量分析</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-heading'>📦 成交量分析（最新5根）</div>", unsafe_allow_html=True)
+        r5 = volume_analysis.get('recent5_ratio', 1.0)
+        vbias = volume_analysis.get('vol_bias', '')
+        vdiv  = volume_analysis.get('vol_divergence', '') or '無'
         st.markdown(f"""<div class='white-card'>
-          {_info_row("成交量狀態", volume_analysis.get('vol_signal','-'),      _color_cls(volume_analysis.get('vol_signal','')))}
-          {_info_row("比均量",     f"{vol_ratio:.1f}x")}
+          {_info_row("最新1根訊號", volume_analysis.get('vol_signal','-'),      _color_cls(volume_analysis.get('vol_signal','')))}
+          {_info_row("最新1根量比", f"{vol_ratio:.1f}x 均量")}
+          {_info_row("近5根量比",   f"{r5:.1f}x · {vbias}",
+                     "bull" if "多頭" in vbias else ("bear" if "空頭" in vbias else ""))}
           {_info_row("成交量解讀", volume_analysis.get('interpretation','-'))}
           {_info_row("主力動向",   volume_analysis.get('smart_vol','-'),        _color_cls(volume_analysis.get('smart_vol','')))}
+          {_info_row("量價背離",   vdiv)}
         </div>""", unsafe_allow_html=True)
 
     # ─── BACKTEST ─────────────────────────────────────────────────────────────
