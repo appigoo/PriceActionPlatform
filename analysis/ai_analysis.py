@@ -47,13 +47,12 @@ def generate_ai_analysis(ticker, df, patterns, market_struct, volume_analysis,
     supports    = sr_levels.get('supports', [])
     resistances = sr_levels.get('resistances', [])
 
-    detected   = patterns.get('detected', [])
-    bull_pat   = [p for p in detected if p['bias'] == 'bull']
-    bear_pat   = [p for p in detected if p['bias'] == 'bear']
-    neutral_pat = [p for p in detected if p['bias'] == 'neutral']
-    macro_pat  = [p for p in detected if p['name'] in
-                  ("W底型態 📐","M頂型態 📐","頭肩底 🔔","頭肩頂 🔔",
-                   "對稱三角收斂 △","上升三角 △↑","下降三角 △↓")]
+    # 直接從分類結構取，不需要再過濾
+    single_k_pat = patterns.get('single_k', [])
+    double_k_pat = patterns.get('double_k', [])
+    triple_k_pat = patterns.get('triple_k', [])
+    macro_pat    = patterns.get('macro', [])
+    detected     = patterns.get('detected', [])
 
     sections = []
 
@@ -79,46 +78,28 @@ def generate_ai_analysis(ticker, df, patterns, market_struct, volume_analysis,
         s1 += f"\n\n{reversal}"
     sections.append(s1)
 
-    # ── Section 2：單K型態 ───────────────────────────────────────────────
-    single_k = [p for p in detected if p['name'] in (
-        "錘頭線 🔨","上吊線 🪢","流星線 ⭐","十字線 ✚","墓碑線 🪦","蜻蜓線 🌿",
-        "長上影線 ↑","長下影線 ↓","光頭光腳陽線 ▮","光頭光腳陰線 ▮"
-    )]
-    if single_k:
-        recent_single = single_k[-3:]
-        descs = []
-        for p in recent_single:
-            desc = p.get('desc', '')
-            descs.append(f"【{p['name']}】{desc}")
-        sections.append("**〔單K型態〕**\n" + "\n".join(descs))
+    # ── Section 2：單K型態（最新第-1根）────────────────────────────────────
+    if single_k_pat:
+        descs = [f"【{p['name']}】{p.get('desc','')}" for p in single_k_pat]
+        sections.append("**〔單K型態〕**（最新1根）\n" + "\n".join(descs))
 
-    # ── Section 3：雙K型態 ───────────────────────────────────────────────
-    double_k = [p for p in detected if any(k in p['name'] for k in (
-        "吞噬","孕線","烏雲","穿刺"
-    ))]
-    if double_k:
-        recent_double = double_k[-3:]
-        descs = [f"【{p['name']}】{p.get('desc','')}" for p in recent_double]
-        sections.append("**〔雙K型態〕**\n" + "\n".join(descs))
+    # ── Section 3：雙K型態（最新第-2、-1根）─────────────────────────────────
+    if double_k_pat:
+        descs = [f"【{p['name']}】{p.get('desc','')}" for p in double_k_pat]
+        sections.append("**〔雙K型態〕**（最新2根）\n" + "\n".join(descs))
 
-    # ── Section 4：三K以上型態 ───────────────────────────────────────────
-    triple_k = [p for p in detected if any(k in p['name'] for k in (
-        "啟明星","黃昏星","紅三兵","三隻烏鴉","上升三法","下跌三法"
-    ))]
-    if triple_k:
-        recent_triple = triple_k[-3:]
-        descs = [f"【{p['name']}】{p.get('desc','')}" for p in recent_triple]
-        sections.append("**〔三K以上型態〕**\n" + "\n".join(descs))
+    # ── Section 4：三K以上型態（最新3-5根）──────────────────────────────────
+    if triple_k_pat:
+        descs = [f"【{p['name']}】{p.get('desc','')}" for p in triple_k_pat]
+        sections.append("**〔三K以上型態〕**（最新3-5根）\n" + "\n".join(descs))
 
-    # ── Section 5：型態學 ────────────────────────────────────────────────
+    # ── Section 5：型態學（全期數據長期結構）────────────────────────────────
     if macro_pat:
         macro_descs = []
         for p in macro_pat:
             d = p.get('desc', '')
-            if p.get('target'):
-                d += f" → 型態目標 ${p['target']:.2f}"
             macro_descs.append(f"【{p['name']}】{d}")
-        sections.append("**〔型態學〕**\n" + "\n".join(macro_descs))
+        sections.append("**〔型態學〕**（長期結構）\n" + "\n".join(macro_descs))
 
     # ── Section 6：成交量分析（集中最新5根）────────────────────────────────
     r5        = volume_analysis.get('recent5_ratio', 1.0)
