@@ -227,4 +227,18 @@ def build_chart(df, ticker, interval, sr_levels, signals, market_struct, pattern
     fig.update_yaxes(tickprefix='$', row=1, col=1)
     fig.update_yaxes(title_text="成交量", title_font=dict(size=9, color=AXIS_COLOR), row=2, col=1)
 
+    # ── RANGEBREAKS：隱藏非交易時段空白 ──────────────────────────────────────
+    intraday = interval in {"1m", "5m", "15m", "30m", "1h"}
+    if intraday:
+        # 隱藏週末 + 非交易時段（16:00 到次日 09:30 ET）
+        fig.update_xaxes(rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+            dict(bounds=[16, 9.5], pattern="hour"),
+        ])
+    else:
+        # 日線/週線：只隱藏週末
+        fig.update_xaxes(rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+        ])
+
     return fig
