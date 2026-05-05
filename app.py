@@ -92,50 +92,131 @@ def _strip_html(html: str) -> str:
     return chr(10).join(lines).strip()
 
 def _build_tg_signal_msg(ticker, sig, trend, overall, patterns,
-                          signals, volume_analysis, market_struct) -> str:
-    sig_icon = "🟢 BUY 做多" if sig == "BUY" else "🔴 SELL 做空"
-    all_pats = (patterns.get('single_k',[]) + patterns.get('double_k',[]) +
-                patterns.get('triple_k',[]) + patterns.get('macro',[]))
-    vol_sig = volume_analysis.get('vol_signal', '-')
-    vol_r   = volume_analysis.get('vol_ratio', 1.0)
-    trade   = signals.get('trade_setup', {})
-    ks  = trade.get('key_support', 0)
-    kr  = trade.get('key_resistance', 0)
-    sl  = trade.get('stop_loss', 0)
-    rrr = trade.get('rrr', 'N/A')
+                          signals, volume_analysis, market_struct,
+                          scores, sr_levels, interval_lbl, current_price,
+                          ai_text="") -> str:
+    """生成格式完整的 Telegram 交易訊號（純 Markdown）"""
+    import datetime as _dt
+    nl  = chr(10)
+    sep = chr(8212) * 20
+
+    # ── 基本訊號 ──────────────────────────────────────────────────────────────
+    sig_icon  = "🟢 BUY 做多" if sig == "BUY" else "🔴 SELL 做空"
+    sig_emoji = "🚀" if "強烈看多" in overall else ("📈" if "偏多" in overall else
+                "💀" if "強烈看空" in overall else ("📉" if "偏空" in overall else "⟷"))
+    confidence = scores.get('confidence', 0)
+
+    # ── 市場結構 ──────────────────────────────────────────────────────────────
     swing    = market_struct.get('swing_desc', '-')
     reversal = _strip_html(market_struct.get('reversal_signal', ''))
+
+    # ── 型態 ──────────────────────────────────────────────────────────────────
     sk = patterns.get('single_k',[{}])[0].get('name','-') if patterns.get('single_k') else '-'
     dk = patterns.get('double_k',[{}])[0].get('name','-') if patterns.get('double_k') else '-'
     tk = patterns.get('triple_k',[{}])[0].get('name','-') if patterns.get('triple_k') else '-'
-    sep = chr(10) + chr(8212)*14 + chr(10)
-    nl  = chr(10)
+    macro_pats = patterns.get('macro', [])
+    macro_str  = ', '.join([p['name'].split()[0] for p in macro_pats[:2]]) if macro_pats else '-'
+
+    # ── 成交量 ────────────────────────────────────────────────────────────────
+    vol_sig  = volume_analysis.get('vol_signal', '-')
+    vol_r    = volume_analysis.get('vol_ratio', 1.0)
+    vbias    = volume_analysis.get('vol_bias', '')
+    vdiv     = volume_analysis.get('vol_divergence', '')
+
+    # ── 交易建議 ──────────────────────────────────────────────────────────────
+    trade = signals.get('trade_setup', {})
+    entry = current_price
+    ks    = trade.get('key_support', 0)
+    kr    = trade.get('key_resistance', 0)
+    bp    = trade.get('breakout_level', 0)
+    sl    = trade.get('stop_loss', 0)
+    rrr   = trade.get('rrr', 'N/A')
+    short = trade.get('short_term', '-')
+    mid   = trade.get('mid_term', '-')
+
+    # ── 支撐阻力詳細 ──────────────────────────────────────────────────────────
+    supports    = sr_levels.get('supports', [])
+    resistances = sr_levels.get('resistances', [])
+    sup_str = ' / '.join(['$'+str(round(s,2)) for s in supports[:3]]) if supports else '-'
+    res_str = ' / '.join(['$'+str(round(r,2)) for r in resistances[:3]]) if resistances else '-'
+    dz = sr_levels.get('demand_zones', [])
+    sz = sr_levels.get('supply_zones', [])
+    dz_str = ('$'+str(round(dz[0][0],2))+'-$'+str(round(dz[0][1],2))) if dz else '-'
+    sz_str = ('$'+str(round(sz[0][0],2))+'-$'+str(round(sz[0][1],2))) if sz else '-'
+
+    # ── 綜合結論（純文字）────────────────────────────────────────────────────
+    conclusion = _strip_html(ai_text)
+    # 只取綜合結論段落
+    if '綜合結論' in conclusion:
+        idx = conclusion.find('綜合結論')
+        conclusion = conclusion[idx+4:].strip()
+        conclusion = conclusion[:250]  # 最多250字
+    else:
+        # fallback：用評級＋原因
+        reasons = signals.get('buy_reasons' if sig=='BUY' else 'sell_reasons', [])
+        reason_txt = ' + '.join(reasons[:4]) if reasons else ''
+        conclusion = overall + '｜' + reason_txt
+
+    # ── 組裝訊息 ──────────────────────────────────────────────────────────────
+    now = _dt.datetime.now().strftime('%Y-%m-%d %H:%M')
     lines = [
-        "🚨 *" + ticker + " 交易訊號*",
-        chr(8212)*14,
+        sig_emoji + " *" + ticker + " 交易訊號*",
+        sep,
+        # 基本訊號
         "訊號：*" + sig_icon + "*",
-        "評級：" + overall,
-        "趨勢：" + trend + "（" + swing + "）",
+        "評級：*" + overall + "*  信心 " + str(confidence) + "%",
+        "時間週期：" + interval_lbl,
+        "當前價格：*$" + str(round(entry, 2)) + "*",
+        "",
+        # 趨勢
+        "📊 *市場結構*",
+        "• " + trend + "（" + swing + "）",
     ]
     if reversal:
-        lines.append("⚠️ " + reversal)
+        r_clean = reversal.replace("⚠️ ", "").replace("⚠️", "").strip()
+        lines.append("• ⚠️ " + r_clean)
     lines += [
         "",
-        "📐 *型態識別*",
+        # 型態
+        "📐 *K線型態*",
         "• 單K：" + sk,
         "• 雙K：" + dk,
         "• 多K：" + tk,
+        "• 型態學：" + macro_str,
         "",
+        # 成交量
         "📦 *成交量*",
         "• " + vol_sig + "（" + str(round(vol_r,1)) + "x均量）",
+        "• " + vbias,
+    ]
+    if vdiv:
+        lines.append("• " + vdiv)
+    lines += [
         "",
+        # 支撐阻力
+        "🗺 *支撐與阻力*",
+        "• 關鍵支撐：" + sup_str,
+        "• 關鍵阻力：" + res_str,
+        "• Demand Zone：" + dz_str,
+        "• Supply Zone：" + sz_str,
+        "",
+        # 交易建議
         "💰 *交易建議*",
-        "• 支撐：$" + str(round(ks,2)),
-        "• 阻力：$" + str(round(kr,2)),
-        "• 止損：$" + str(round(sl,2)),
-        "• 風報比：" + str(rrr),
-        chr(8212)*14,
-        "_SMC Pro · " + __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M') + "_",
+        "• 入市價格：*$" + str(round(entry, 2)) + "*",
+        "• 短線方向：" + short,
+        "• 中線方向：" + mid,
+        "• 關鍵支撐：$" + str(round(ks, 2)),
+        "• 關鍵阻力：$" + str(round(kr, 2)),
+        "• 突破價位：$" + str(round(bp, 2)),
+        "• 止損位：  *$" + str(round(sl, 2)) + "*",
+        "• 風報比：  " + str(rrr),
+        "",
+        # 綜合結論
+        "🧠 *綜合結論*",
+        conclusion,
+        "",
+        sep,
+        "_SMC Pro · " + now + "_",
     ]
     return nl.join(lines)
 
@@ -495,8 +576,11 @@ def render_ticker(ctx: dict):
     if tg_token and tg_chat_id and sig in ('BUY','SELL'):
         h = hashlib.md5(f"{ticker}{interval}{sig}{datetime.now().strftime('%Y%m%d%H')}".encode()).hexdigest()
         if h not in st.session_state.alert_hashes:
-            msg = _build_tg_signal_msg(ticker, sig, trend, overall, patterns,
-                                        signals, volume_analysis, market_struct)
+            msg = _build_tg_signal_msg(
+                            ticker, sig, trend, overall, patterns,
+                            signals, volume_analysis, market_struct,
+                            scores, sr_levels, interval_label,
+                            float(latest['Close']), ai_text)
             if send_telegram_alert(tg_token, tg_chat_id, msg):
                 st.session_state.alert_hashes.add(h)
                 st.success(f"📱 {ticker} Telegram 訊號已發送")
