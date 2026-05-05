@@ -81,6 +81,8 @@ _ss("cached",        {})      # {ticker: result_dict}
 _ss("monitors",      {})      # {ticker: {levels, triggered, active}}
 _ss("alert_hashes",  set())
 _ss("active_tab",    0)
+_ss("gap_alerts",    {})   # {ticker: {cond_key: enabled}}
+_ss("gap_alerts",    {})   # {ticker: {cond_key: {active, triggered, tg_on}}}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 import re as _re
@@ -221,6 +223,193 @@ def _build_tg_signal_msg(ticker, sig, trend, overall, patterns,
     return nl.join(lines)
 
 
+def _compute_gap_conditions(df) -> list:
+    """計算三個跳空條件的當前狀態"""
+    import numpy as np
+    if len(df) < 2:
+        return []
+
+    c  = df.iloc[-1]   # 最新一根
+    p  = df.iloc[-2]   # 前一根
+
+    open_c   = float(c['Open'])
+    close_c  = float(c['Close'])
+    low_c    = float(c['Low'])
+    close_p  = float(p['Close'])
+    high_p   = float(p['High'])
+
+    # 條件1：開盤 vs 前收（開盤跳空）
+    gap1_pct  = (open_c - close_p) / close_p * 100
+    gap1_up   = open_c > close_p
+    gap1_desc = (f"開盤 ${open_c:.2f} {'高於' if gap1_up else '低於'} "
+                 f"前收 ${close_p:.2f}  "
+                 f"({'＋' if gap1_up else ''}{gap1_pct:.2f}%)")
+    gap1_fire = abs(gap1_pct) > 0.3   # 大於 0.3% 才算跳空
+
+    # 條件2：開盤 vs 前高（突破前高開盤）
+    gap2_pct  = (open_c - high_p) / high_p * 100
+    gap2_up   = open_c > high_p
+    gap2_desc = (f"開盤 ${open_c:.2f} {'高於' if gap2_up else '低於'} "
+                 f"前高 ${high_p:.2f}  "
+                 f"({'＋' if gap2_up else ''}{gap2_pct:.2f}%)")
+    gap2_fire = open_c > high_p   # 開盤跳過前高
+
+    # 條件3：最低價 vs 前高（日內低點 vs 前高，判斷是否回補缺口）
+    gap3_pct  = (low_c - high_p) / high_p * 100
+    gap3_above = low_c > high_p
+    gap3_desc = (f"最低 ${low_c:.2f} {'高於' if gap3_above else '低於'} "
+                 f"前高 ${high_p:.2f}  "
+                 f"({'＋' if gap3_above else ''}{gap3_pct:.2f}%)")
+    gap3_fire = low_c > high_p   # 最低價仍高於前高 = 缺口未回補
+
+    return [
+        {
+            "key":   "gap_open_vs_prev_close",
+            "label": "① 開盤 vs 前收（開盤跳空）",
+            "desc":  gap1_desc,
+            "fired": gap1_fire,
+            "up":    gap1_up,
+            "pct":   gap1_pct,
+            "icon":  "🔼" if gap1_up else "🔽",
+            "tg_msg_tmpl": "開盤跳空 {dir}：開盤 ${open:.2f} {vs} 前收 ${ref:.2f}（{pct:+.2f}%）",
+        },
+        {
+            "key":   "gap_open_vs_prev_high",
+            "label": "② 開盤 vs 前高（突破前高開盤）",
+            "desc":  gap2_desc,
+            "fired": gap2_fire,
+            "up":    gap2_up,
+            "pct":   gap2_pct,
+            "icon":  "🚀" if gap2_up else "↘️",
+            "tg_msg_tmpl": "開盤突破前高 {dir}：開盤 ${open:.2f} {vs} 前高 ${ref:.2f}（{pct:+.2f}%）",
+        },
+        {
+            "key":   "gap_low_vs_prev_high",
+            "label": "③ 最低價 vs 前高（缺口是否回補）",
+            "desc":  gap3_desc,
+            "fired": gap3_fire,
+            "up":    gap3_above,
+            "pct":   gap3_pct,
+            "icon":  "✅" if gap3_above else "⚠️",
+            "tg_msg_tmpl": "缺口{'未回補' if gap3_above else '已回補'}: 最低 ${open:.2f} {vs} 前高 ${ref:.2f}（{pct:+.2f}%）",
+        },
+    ]
+
+
+def _render_gap_alerts(ticker: str, df, tg_token: str, tg_chat_id: str):
+    """渲染跳空警報區塊 - 三個條件 + Telegram 警報開關"""
+    from analysis.telegram_bot import send_telegram_alert
+
+    conditions = _compute_gap_conditions(df)
+    if not conditions:
+        st.info("數據不足，無法計算跳空條件")
+        return
+
+    has_tg = bool(tg_token and tg_chat_id)
+
+    # 初始化該股票的 gap_alerts 狀態
+    if ticker not in st.session_state.gap_alerts:
+        st.session_state.gap_alerts[ticker] = {
+            c['key']: {"enabled": False, "last_fired": None}
+            for c in conditions
+        }
+
+    ga = st.session_state.gap_alerts[ticker]
+
+    # ── Telegram 總開關 ──────────────────────────────────────────────────────
+    col_sw1, col_sw2 = st.columns([3, 1])
+    with col_sw1:
+        st.markdown(
+            "<div style='font-size:.78rem;color:#6b6560;padding:.3rem 0'>"
+            "開啟各條件的警報開關，觸發時自動發送 Telegram</div>",
+            unsafe_allow_html=True
+        )
+    with col_sw2:
+        if not has_tg:
+            st.markdown(
+                "<div style='font-size:.7rem;color:#c0392b;text-align:right'>"
+                "⚠️ 請先填寫<br>Telegram 設定</div>",
+                unsafe_allow_html=True
+            )
+
+    # ── 三個條件卡片 ─────────────────────────────────────────────────────────
+    for cond in conditions:
+        key      = cond['key']
+        fired    = cond['fired']
+        up       = cond['up']
+        pct      = cond['pct']
+        icon     = cond['icon']
+        enabled  = ga.get(key, {}).get('enabled', False)
+
+        # 顏色
+        if fired:
+            card_bg  = "#eaf4ee" if up else "#fdecea"
+            card_bdr = "#3d8c5f" if up else "#c0392b"
+            val_col  = "#3d8c5f" if up else "#c0392b"
+            status   = f"{icon} 已觸發"
+        else:
+            card_bg  = "#f9f7f4"
+            card_bdr = "#e0dbd2"
+            val_col  = "#9e9890"
+            status   = "○ 未觸發"
+
+        c_info, c_toggle = st.columns([4, 1])
+        with c_info:
+            st.markdown(
+                f"<div style='background:{card_bg};border:1px solid {card_bdr};"
+                f"border-radius:8px;padding:.65rem 1rem;margin-bottom:.4rem'>"
+                f"<div style='font-size:.72rem;color:#6b6560;margin-bottom:3px'>"
+                f"{cond['label']}</div>"
+                f"<div style='font-family:IBM Plex Mono,monospace;font-size:.82rem;"
+                f"color:{val_col};font-weight:600'>{cond['desc']}</div>"
+                f"<div style='font-size:.68rem;color:{val_col};margin-top:3px'>"
+                f"{status}  {'▲ 跳空向上' if up else '▼ 跳空向下'} {abs(pct):.2f}%</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+        with c_toggle:
+            new_enabled = st.toggle(
+                "警報",
+                value=enabled,
+                key=f"gap_{ticker}_{key}",
+                disabled=not has_tg,
+                help="需先填入 Telegram Token 和 Chat ID" if not has_tg else "開啟後觸發條件時自動發送 Telegram",
+            )
+            if new_enabled != enabled:
+                ga[key]['enabled'] = new_enabled
+                st.rerun()
+
+        # 觸發 Telegram（條件成立 + 開關開啟 + 未重複發送）
+        if fired and enabled and has_tg:
+            last = ga.get(key, {}).get('last_fired')
+            # 每天只發一次（同一條件同一天）
+            today = __import__('datetime').date.today().isoformat()
+            if last != today:
+                c0     = df.iloc[-1]
+                p0     = df.iloc[-2]
+                open_c = float(c0['Open'])
+                ref    = float(p0['Close']) if 'prev_close' in key else float(p0['High'])
+                dir_s  = "向上 ↑" if up else "向下 ↓"
+                vs_s   = "高於" if up else "低於"
+                nl     = chr(10)
+                sep    = chr(8212) * 16
+                msg = (
+                    f"{'🔼' if up else '🔽'} *{ticker} 跳空警報*{nl}"
+                    f"{sep}{nl}"
+                    f"條件：{cond['label']}{nl}"
+                    f"方向：*{dir_s}*{nl}"
+                    f"數值：{cond['desc']}{nl}"
+                    f"幅度：{pct:+.2f}%{nl}"
+                    f"{sep}{nl}"
+                    f"_SMC Pro · {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}_"
+                )
+                if send_telegram_alert(tg_token, tg_chat_id, msg):
+                    ga[key]['last_fired'] = today
+                    st.toast(
+                        f"{'🔼' if up else '🔽'} {ticker} 跳空警報已發送！",
+                        icon="🔔"
+                    )
+
 def _cc(val):
     sv = str(val)
     if any(k in sv for k in ("多頭","突破","吸籌","放量","低位","看多","看漲","上漲","飆升","跳空上")): return "bull"
@@ -322,6 +511,163 @@ def _analyze_close_prices(df) -> dict:
 def _row(k, v, cls=""):
     return (f"<div class='info-row'><span class='info-key'>{k}</span>"
             f"<span class='info-val {cls}'>{v}</span></div>")
+
+
+def _compute_gap_conditions(df) -> dict:
+    """計算三個跳空條件的當前狀態"""
+    import numpy as np
+    if len(df) < 2:
+        return {}
+    c  = df.iloc[-1];  p  = df.iloc[-2]
+    o_now  = float(c['Open']);   c_prev = float(p['Close'])
+    h_prev = float(p['High']);   l_prev = float(p['Low'])
+    l_now  = float(c['Low']);    h_now  = float(c['High'])
+    c_now  = float(c['Close'])
+
+    # 條件1：開盤 VS 前收（跳空高開/低開）
+    gap1_pct = (o_now - c_prev) / c_prev * 100
+    cond1 = {
+        "label":   "① 開盤 vs 前收",
+        "desc":    f"開盤 ${o_now:.2f}  vs  前收 ${c_prev:.2f}",
+        "pct":     gap1_pct,
+        "up":      gap1_pct > 0,
+        "gap_up":  gap1_pct > 0.3,
+        "gap_dn":  gap1_pct < -0.3,
+        "status":  (f"跳空高開 +{gap1_pct:.2f}%" if gap1_pct > 0.3 else
+                    f"跳空低開 {gap1_pct:.2f}%" if gap1_pct < -0.3 else
+                    f"平開 ({gap1_pct:+.2f}%)"),
+    }
+
+    # 條件2：開盤 VS 前高（突破前高開盤）
+    gap2_pct = (o_now - h_prev) / h_prev * 100
+    cond2 = {
+        "label":   "② 開盤 vs 前高",
+        "desc":    f"開盤 ${o_now:.2f}  vs  前高 ${h_prev:.2f}",
+        "pct":     gap2_pct,
+        "up":      gap2_pct > 0,
+        "gap_up":  gap2_pct > 0,      # 開盤高於前高 = 強勢突破
+        "gap_dn":  gap2_pct < -0.5,   # 開盤遠低於前高 = 弱勢
+        "status":  (f"強勢！開盤高於前高 +{gap2_pct:.2f}%" if gap2_pct > 0 else
+                    f"開盤低於前高 {gap2_pct:.2f}%"),
+    }
+
+    # 條件3：今日最低價 VS 前日最高價（關鍵支撐失守偵測）
+    # 若今低 < 前高：代表今日低點跌破前日高點，前高支撐失守
+    # 若今低 > 前高：代表今日全天均在前高之上，強勢
+    gap3_pct = (l_now - h_prev) / h_prev * 100
+    cond3 = {
+        "label":   "③ 今低 vs 前高",
+        "desc":    f"今日最低 ${l_now:.2f}  vs  前日最高 ${h_prev:.2f}",
+        "pct":     gap3_pct,
+        "up":      gap3_pct > 0,
+        "gap_up":  gap3_pct > 0,      # 今低 > 前高 = 全天強勢，不回踩
+        "gap_dn":  gap3_pct < -0.3,   # 今低 < 前高 = 跌破前高支撐
+        "status":  (f"強勢！今低高於前高 +{gap3_pct:.2f}%（全天守住前高之上）" if gap3_pct > 0 else
+                    f"今低跌破前高 {gap3_pct:.2f}%（前高支撐失守 ⚠️）" if gap3_pct < -0.3 else
+                    f"今低貼近前高 ({gap3_pct:+.2f}%)（關鍵測試位置）"),
+    }
+
+    return {"cond1": cond1, "cond2": cond2, "cond3": cond3}
+
+
+def _render_gap_alerts(ticker: str, df, tg_token: str, tg_chat_id: str):
+    """渲染跳空警報卡片，包含3個條件 + Telegram 開關"""
+    import datetime as _dt
+
+    conds = _compute_gap_conditions(df)
+    if not conds:
+        st.markdown("<div class='white-card' style='color:#9e9890;font-size:.82rem'>數據不足</div>",
+                    unsafe_allow_html=True)
+        return
+
+    # 初始化該股票的 gap_alerts session state
+    ga = st.session_state.gap_alerts
+    if ticker not in ga:
+        ga[ticker] = {
+            "cond1": {"active": False, "tg_on": False, "triggered": set()},
+            "cond2": {"active": False, "tg_on": False, "triggered": set()},
+            "cond3": {"active": False, "tg_on": False, "triggered": set()},
+        }
+    cfg = ga[ticker]
+    has_tg = bool(tg_token and tg_chat_id)
+
+    # CSS 樣式
+    st.markdown("""
+    <style>
+    .gap-card{background:var(--card);border:1px solid var(--border);border-radius:9px;
+              padding:.85rem 1rem;margin-bottom:.6rem;}
+    .gap-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+    .gap-label{font-family:IBM Plex Mono,monospace;font-size:.78rem;font-weight:700;color:#1a1a1a;}
+    .gap-desc{font-size:.75rem;color:#6b6560;margin-bottom:5px;}
+    .gap-status-up{font-family:IBM Plex Mono,monospace;font-size:.82rem;
+                   font-weight:700;color:#3d8c5f;}
+    .gap-status-dn{font-family:IBM Plex Mono,monospace;font-size:.82rem;
+                   font-weight:700;color:#c0392b;}
+    .gap-status-neu{font-family:IBM Plex Mono,monospace;font-size:.82rem;color:#6b6560;}
+    .gap-triggered{background:#fdecea;border:1px solid #f5b8b3;border-radius:5px;
+                   padding:3px 10px;font-size:.72rem;color:#c0392b;font-family:IBM Plex Mono,monospace;}
+    .gap-ok{background:#eaf4ee;border:1px solid #a8d5b8;border-radius:5px;
+            padding:3px 10px;font-size:.72rem;color:#3d8c5f;font-family:IBM Plex Mono,monospace;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    for key, cond in conds.items():
+        c = cfg[key]
+        triggered_key = f"{ticker}_{key}_{cond['pct']:.2f}"
+        is_triggered  = (c["active"] and
+                         (cond["gap_up"] or cond["gap_dn"]))
+
+        # 狀態顏色
+        if cond["gap_up"]:   s_cls = "gap-status-up"
+        elif cond["gap_dn"]: s_cls = "gap-status-dn"
+        else:                s_cls = "gap-status-neu"
+
+        # 渲染卡片
+        badge = "<span class='gap-triggered'>⚡ 已觸發</span>" if (c["active"] and is_triggered) else                 "<span class='gap-ok'>✓ 監控中</span>" if c["active"] else ""
+
+        st.markdown(f"""
+        <div class='gap-card'>
+          <div class='gap-header'>
+            <span class='gap-label'>{cond['label']}</span>
+            {badge}
+          </div>
+          <div class='gap-desc'>{cond['desc']}</div>
+          <div class='{s_cls}'>{cond['status']}</div>
+        </div>""", unsafe_allow_html=True)
+
+        # 控制列：開關 + Telegram 開關
+        btn_col1, btn_col2 = st.columns([1, 1])
+        with btn_col1:
+            mon_lbl = f"⏹ 停止監控" if c["active"] else f"▶ 啟動監控"
+            if st.button(mon_lbl, key=f"gap_mon_{ticker}_{key}", use_container_width=True):
+                c["active"] = not c["active"]
+                if not c["active"]:
+                    c["triggered"] = set()
+                st.rerun()
+        with btn_col2:
+            tg_lbl = (f"🔔 TG 警報 {'ON' if c['tg_on'] else 'OFF'}"
+                      + ("" if has_tg else "（需填 Telegram）"))
+            if st.button(tg_lbl, key=f"gap_tg_{ticker}_{key}",
+                         use_container_width=True, disabled=not has_tg):
+                c["tg_on"] = not c["tg_on"]
+                st.rerun()
+
+        # 自動觸發 Telegram
+        if c["active"] and c["tg_on"] and is_triggered and has_tg:
+            if triggered_key not in c["triggered"]:
+                c["triggered"].add(triggered_key)
+                from analysis.telegram_bot import send_telegram_alert
+                nl = chr(10)
+                icon = "🚀" if cond["gap_up"] else "💥"
+                msg  = (icon + " *" + ticker + " 跳空警報*" + nl
+                        + chr(8212)*16 + nl
+                        + cond['label'] + nl
+                        + cond['desc'] + nl
+                        + "*" + cond['status'] + "*" + nl
+                        + chr(8212)*16 + nl
+                        + "_SMC Pro · " + _dt.datetime.now().strftime('%Y-%m-%d %H:%M') + "_")
+                send_telegram_alert(tg_token, tg_chat_id, msg)
+                st.toast(f"{icon} {ticker} {cond['label']} 跳空觸發！Telegram 已發送", icon="🚨")
 
 def _bar(label, val, color):
     return (f"<div class='score-wrap'><div class='score-label-row'><span>{label}</span>"
@@ -642,6 +988,10 @@ def render_ticker(ctx: dict):
           {_row("主力動向",    pa['price_smart'],                   _cc(pa['price_smart']))}
           {_row("跳空缺口",    pa['gap_desc'],                      _cc(pa['gap_desc']))}
         </div>""", unsafe_allow_html=True)
+
+        # ── 跳空警報區塊 ──────────────────────────────────────────────────────
+        st.markdown("<div class='section-heading'>🚨 跳空警報</div>", unsafe_allow_html=True)
+        _render_gap_alerts(ticker, df, tg_token, tg_chat_id)
 
     # backtest
     st.markdown("<div class='section-heading'>📉 回測系統</div>", unsafe_allow_html=True)
