@@ -76,7 +76,7 @@ from charts.candlestick_chart    import build_chart
 def _ss(key, val):
     if key not in st.session_state: st.session_state[key] = val
 
-_ss("stock_list",    ["TSLA","NIO","XPEV","AMZN","GOOGL","INTC","AMD","TSLL", "NVDA", "META", "AAPL","TSM","SNDK","COIN","IBKR","FUTU","QQQ","SPY","MSFT"])
+_ss("stock_list",    ["TSLA", "NVDA", "META", "AAPL"])
 _ss("cached",        {})      # {ticker: result_dict}
 _ss("monitors",      {})      # {ticker: {levels, triggered, active}}
 _ss("alert_hashes",  set())
@@ -223,9 +223,101 @@ def _build_tg_signal_msg(ticker, sig, trend, overall, patterns,
 
 def _cc(val):
     sv = str(val)
-    if any(k in sv for k in ("多頭","突破","吸籌","放量","低位","看多","看漲")): return "bull"
-    if any(k in sv for k in ("空頭","派發","高位","跌破","出貨","看空","看跌")): return "bear"
+    if any(k in sv for k in ("多頭","突破","吸籌","放量","低位","看多","看漲","上漲","飆升","跳空上")): return "bull"
+    if any(k in sv for k in ("空頭","派發","高位","跌破","出貨","看空","看跌","下跌","跳空下")): return "bear"
     return ""
+
+
+def _analyze_close_prices(df) -> dict:
+    """分析最新5根K線的收盤價行為"""
+    import numpy as np
+    closes = df['Close'].values
+    opens  = df['Open'].values
+    highs  = df['High'].values
+    lows   = df['Low'].values
+    n = len(df)
+    if n < 2:
+        return {k: '-' for k in ['latest_close_desc','last1_chg','last5_trend','price_smart','gap_desc']}
+
+    c0 = closes[-1]   # 最新
+    c1 = closes[-2]   # 前一根
+    o0 = opens[-1]
+    h0 = highs[-1]
+    l0 = lows[-1]
+
+    # ── 最新收盤描述 ─────────────────────────────────────────────────────────
+    mean20 = float(np.mean(closes[-20:])) if n >= 20 else float(np.mean(closes))
+    pos = "高位" if c0 > mean20 * 1.03 else ("低位" if c0 < mean20 * 0.97 else "中位")
+    dir0 = "陽線收盤" if c0 >= o0 else "陰線收盤"
+    latest_close_desc = f"{pos} · {dir0} · ${c0:.2f}"
+
+    # ── 最新1根漲跌幅 ────────────────────────────────────────────────────────
+    chg1 = (c0 - c1) / c1 * 100 if c1 > 0 else 0
+    chg1_icon = "▲" if chg1 >= 0 else "▼"
+    last1_chg = f"{chg1_icon} {abs(chg1):.2f}%（${c0:.2f} vs ${c1:.2f}）"
+
+    # ── 近5根走勢 ────────────────────────────────────────────────────────────
+    if n >= 5:
+        c5 = closes[-5:]
+        chg5 = (c5[-1] - c5[0]) / c5[0] * 100
+        bull5 = sum(1 for i in range(1,5) if c5[i] > c5[i-1])
+        bear5 = 4 - bull5
+        # 趨勢強度：連續上漲/下跌
+        streak = 1
+        streak_dir = "上漲" if c5[-1] > c5[-2] else "下跌"
+        for i in range(len(c5)-2, 0, -1):
+            if (c5[i] > c5[i-1]) == (c5[-1] > c5[-2]):
+                streak += 1
+            else:
+                break
+        trend_desc = f"{'▲' if chg5>=0 else '▼'} {abs(chg5):.1f}%（{bull5}漲{bear5}跌，連續{streak}根{streak_dir}）"
+        last5_trend = trend_desc
+    else:
+        chg5 = (c0 - closes[0]) / closes[0] * 100
+        last5_trend = f"{'▲' if chg5>=0 else '▼'} {abs(chg5):.1f}%"
+
+    # ── 收盤價主力動向判斷 ───────────────────────────────────────────────────
+    # 收盤相對日內高低點的位置（越靠近日高 = 多方強）
+    rng0 = h0 - l0
+    close_pos = (c0 - l0) / rng0 if rng0 > 0 else 0.5
+    if close_pos >= 0.80:
+        price_smart = "收盤靠近日高（多方主導，主力護盤）"
+    elif close_pos >= 0.60:
+        price_smart = "收盤偏高（買方積極）"
+    elif close_pos <= 0.20:
+        price_smart = "收盤靠近日低（空方主導，主力打壓）"
+    elif close_pos <= 0.40:
+        price_smart = "收盤偏低（賣方積極）"
+    else:
+        price_smart = f"收盤居中（{close_pos*100:.0f}%位置，多空拉鋸）"
+
+    # ── 跳空缺口偵測 ─────────────────────────────────────────────────────────
+    h1 = highs[-2]
+    l1 = lows[-2]
+
+    gap_desc = "無跳空"
+    gap_cls  = ""
+    if l0 > h1:
+        gap_size = (l0 - h1) / h1 * 100
+        gap_desc = f"跳空向上 ↑ 缺口 +{gap_size:.2f}%（${h1:.2f} → ${l0:.2f}）"
+    elif h0 < l1:
+        gap_size = (l1 - h0) / l1 * 100
+        gap_desc = f"跳空向下 ↓ 缺口 -{gap_size:.2f}%（${l1:.2f} → ${h0:.2f}）"
+    elif abs(o0 - c1) / c1 * 100 > 0.5:
+        # 小跳空（開盤與前收盤有差距）
+        gap_pct = (o0 - c1) / c1 * 100
+        if gap_pct > 0:
+            gap_desc = f"小跳空高開 +{gap_pct:.2f}%（開盤 ${o0:.2f} 高於前收 ${c1:.2f}）"
+        else:
+            gap_desc = f"小跳空低開 {gap_pct:.2f}%（開盤 ${o0:.2f} 低於前收 ${c1:.2f}）"
+
+    return {
+        'latest_close_desc': latest_close_desc,
+        'last1_chg':         last1_chg,
+        'last5_trend':       last5_trend,
+        'price_smart':       price_smart,
+        'gap_desc':          gap_desc,
+    }
 
 def _row(k, v, cls=""):
     return (f"<div class='info-row'><span class='info-key'>{k}</span>"
@@ -537,6 +629,18 @@ def render_ticker(ctx: dict):
                 "bull" if "多頭" in vbias else ("bear" if "空頭" in vbias else ""))}
           {_row("主力動向",   volume_analysis.get('smart_vol','-'),   _cc(volume_analysis.get('smart_vol','')))}
           {_row("量價背離",   vdiv)}
+        </div>""", unsafe_allow_html=True)
+
+        # ── 收盤價分析（最新5根）─────────────────────────────────────────────
+        st.markdown("<div class='section-heading'>💹 收盤價分析（最新5根）</div>", unsafe_allow_html=True)
+        price_analysis = _analyze_close_prices(df)
+        pa = price_analysis
+        st.markdown(f"""<div class='white-card'>
+          {_row("最新收盤",    pa['latest_close_desc'],             _cc(pa['latest_close_desc']))}
+          {_row("最新1根漲跌", pa['last1_chg'],                     _cc(pa['last1_chg']))}
+          {_row("近5根走勢",   pa['last5_trend'],                   _cc(pa['last5_trend']))}
+          {_row("主力動向",    pa['price_smart'],                   _cc(pa['price_smart']))}
+          {_row("跳空缺口",    pa['gap_desc'],                      _cc(pa['gap_desc']))}
         </div>""", unsafe_allow_html=True)
 
     # backtest
