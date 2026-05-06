@@ -76,12 +76,14 @@ from charts.candlestick_chart    import build_chart
 def _ss(key, val):
     if key not in st.session_state: st.session_state[key] = val
 
-_ss("stock_list",    ["TSLA","NVDA", "MSFT", "AMZN", "GOOGL", "META", "AAPL", "NIO","XPEV", "AVGO", "TSM","ASML","AMD","SPY", "QQQ", "IWM", "DIA", "UVXY", "TLT", "UUP", "GLD", "USO"])
+_ss("stock_list",    ["TSLA", "NVDA", "META", "AAPL"])
 _ss("cached",        {})      # {ticker: result_dict}
 _ss("monitors",      {})      # {ticker: {levels, triggered, active}}
 _ss("alert_hashes",  set())
 _ss("active_tab",    0)
 _ss("gap_alerts",    {})   # {ticker: {cond_key: {enabled, last_fired}}}
+_ss("gap_monitor_on", False)  # 跳空監控總開關
+_ss("gap_monitor_fired", {})  # {ticker_dir_hash: True} 去重
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 import re as _re
@@ -590,6 +592,29 @@ with st.sidebar:
     if tg_token:   st.session_state["_tg_token"] = tg_token
     if tg_chat_id: st.session_state["_tg_chat"]  = tg_chat_id
 
+    # ── 跳空監控按鈕（自動刷新下方）────────────────────────────────────────
+    gap_mon_on = st.session_state.gap_monitor_on
+    has_tg_now = bool(st.session_state.get("_tg_token") and st.session_state.get("_tg_chat"))
+
+    gap_btn_lbl = ("⏹ 停止跳空監控" if gap_mon_on
+                   else "🚨 一鍵跳空監控" if has_tg_now
+                   else "🚨 跳空監控（需填 Telegram）")
+    if st.button(gap_btn_lbl, use_container_width=True, key="gap_mon_toggle",
+                 disabled=(not has_tg_now and not gap_mon_on)):
+        st.session_state.gap_monitor_on  = not gap_mon_on
+        st.session_state.gap_monitor_fired = {}   # 切換時清空去重記錄
+        st.rerun()
+
+    # 跳空監控狀態指示
+    if gap_mon_on:
+        fired_cnt = len(st.session_state.gap_monitor_fired)
+        st.markdown(
+            f"<div style='background:#eaf4ee;border:1px solid #a8d5b8;border-radius:7px;"
+            f"padding:.5rem .75rem;font-size:.72rem;color:#2d6a4f;margin-bottom:.5rem'>"
+            f"🚨 跳空監控中 · {interval_lbl} · {len(st.session_state.stock_list)} 支<br>"
+            f"<span style='color:#6b9e8a'>已觸發 {fired_cnt} 次提醒</span></div>",
+            unsafe_allow_html=True)
+
     st.markdown("---")
     # 全部分析按鈕
     analyze_all = st.button("🔍 分析全部股票", use_container_width=True, key="analyze_all")
@@ -609,6 +634,119 @@ with st.sidebar:
     st.markdown("""<div style='margin-top:1rem;font-size:.6rem;color:#9e9890;line-height:1.7'>
     ⚠️ 本平台僅供教育研究用途<br>不構成投資建議<br>交易有風險，請自行承擔
     </div>""", unsafe_allow_html=True)
+
+
+# ── 跳空監控核心 ──────────────────────────────────────────────────────────────
+def _detect_gap(ticker: str, interval: str, bar_count: int) -> dict | None:
+    """
+    獲取最新2根K線，判斷是否有跳空缺口。
+    Gap Up:   current_low  > prev_high  → 綠色
+    Gap Down: current_high < prev_low   → 紅色
+    """
+    try:
+        import yfinance as yf
+        from analysis.data_fetcher import INTERVAL_PERIOD_MAP, _filter_trading_hours
+        period = INTERVAL_PERIOD_MAP.get(interval, "1d")
+        df = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+        if df is None or len(df) < 2:
+            return None
+        df = df.dropna()
+        if interval in {"1m","5m","15m","30m","1h"}:
+            df = _filter_trading_hours(df, interval)
+        df = df[df["Volume"] > 0]
+        if len(df) < 2:
+            return None
+
+        cur  = df.iloc[-1]
+        prev = df.iloc[-2]
+        cur_high  = float(cur['High'])
+        cur_low   = float(cur['Low'])
+        prev_high = float(prev['High'])
+        prev_low  = float(prev['Low'])
+        cur_close = float(cur['Close'])
+        cur_time  = str(df.index[-1])[:16]
+
+        if cur_low > prev_high:
+            gap_pct = (cur_low - prev_high) / prev_high * 100
+            return {
+                "ticker":    ticker,
+                "direction": "up",
+                "icon":      "🟢",
+                "label":     "向上跳空 Gap Up ↑",
+                "detail":    f"今低 ${cur_low:.2f} > 前高 ${prev_high:.2f}",
+                "pct":       gap_pct,
+                "cur_close": cur_close,
+                "cur_time":  cur_time,
+            }
+        elif cur_high < prev_low:
+            gap_pct = (prev_low - cur_high) / prev_low * 100
+            return {
+                "ticker":    ticker,
+                "direction": "down",
+                "icon":      "🔴",
+                "label":     "向下跳空 Gap Down ↓",
+                "detail":    f"今高 ${cur_high:.2f} < 前低 ${prev_low:.2f}",
+                "pct":       gap_pct,
+                "cur_close": cur_close,
+                "cur_time":  cur_time,
+            }
+        return None   # 無跳空
+    except Exception:
+        return None
+
+
+def _run_gap_monitor(stock_list: list, interval: str, bar_count: int):
+    """
+    遍歷所有股票，偵測跳空缺口，觸發時發 Telegram。
+    在每次 rerun 時調用。
+    """
+    if not st.session_state.gap_monitor_on:
+        return
+
+    tg_t = st.session_state.get("_tg_token", "")
+    tg_c = st.session_state.get("_tg_chat", "")
+    if not tg_t or not tg_c:
+        return
+
+    from analysis.telegram_bot import send_telegram_alert
+    import datetime as _dt
+
+    for ticker in stock_list:
+        gap = _detect_gap(ticker, interval, bar_count)
+        if gap is None:
+            continue
+
+        # 去重 key：ticker + direction + 時間戳（精確到分鐘）
+        dedup_key = f"{ticker}_{gap['direction']}_{gap['cur_time']}"
+        if dedup_key in st.session_state.gap_monitor_fired:
+            continue
+
+        # 記錄觸發
+        st.session_state.gap_monitor_fired[dedup_key] = True
+
+        # 發 Telegram
+        nl  = chr(10)
+        sep = chr(8212) * 20
+        now = _dt.datetime.now().strftime('%Y-%m-%d %H:%M')
+        msg = nl.join([
+            gap['icon'] + " *" + ticker + " 跳空警報*",
+            sep,
+            "方向：*" + gap['label'] + "*",
+            "數值：" + gap['detail'],
+            "幅度：+" + f"{gap['pct']:.2f}%",
+            "收盤：$" + f"{gap['cur_close']:.2f}",
+            "時間：" + gap['cur_time'],
+            "週期：" + interval,
+            sep,
+            "_SMC Pro · " + now + "_",
+        ])
+        send_telegram_alert(tg_t, tg_c, msg)
+
+        # 頁面 toast 通知
+        st.toast(
+            f"{gap['icon']} {ticker} {gap['label']} +{gap['pct']:.2f}%",
+            icon="🚨"
+        )
 
 
 # ── 計算單支股票 ───────────────────────────────────────────────────────────────
@@ -929,6 +1067,7 @@ run_all_monitors()
 
 # ── 主介面：多股票 Tabs ────────────────────────────────────────────────────────
 stock_list = st.session_state.stock_list
+_run_gap_monitor(stock_list, interval, bar_count)
 if not stock_list:
     st.info("請在左側股票池新增股票代號")
     st.stop()
