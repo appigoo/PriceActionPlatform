@@ -158,9 +158,17 @@ def generate_signals(df, patterns, market_struct, volume_analysis, sr_levels) ->
         strength = f"{strength}（條件性，大趨勢仍偏空）"
 
     # ── 9. 交易建議 ───────────────────────────────────────────────────────
-    key_support    = supports[0]    if supports    else current * 0.97
-    key_resistance = resistances[0] if resistances else current * 1.03
-    breakout_level = resistances[0] if resistances else current * 1.03
+    # 防呆：確保 key_support < current < key_resistance
+    sup_candidates = [s for s in supports    if s < current]
+    res_candidates = [r for r in resistances if r > current]
+
+    key_support    = sup_candidates[0] if sup_candidates else current * 0.97
+    key_resistance = res_candidates[0] if res_candidates else current * 1.03
+    breakout_level = key_resistance
+
+    # 極端情況兜底
+    if key_support >= current:   key_support    = current * 0.97
+    if key_resistance <= current: key_resistance = current * 1.03
 
     if primary == "BUY":
         stop_loss = key_support * 0.983
@@ -180,7 +188,6 @@ def generate_signals(df, patterns, market_struct, volume_analysis, sr_levels) ->
         risk      = current - stop_loss
         reward    = target - current
         short_dir = "觀望 ⟷"
-
     rrr = f"1 : {reward/risk:.1f}" if risk > 0 else "N/A"
 
     macro_trend = market_struct.get('trend', '橫盤')
