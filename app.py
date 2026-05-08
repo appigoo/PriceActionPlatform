@@ -76,7 +76,7 @@ from charts.candlestick_chart    import build_chart
 def _ss(key, val):
     if key not in st.session_state: st.session_state[key] = val
 
-_ss("stock_list",    ["TSLA","NVDA", "MSFT", "AMZN", "GOOGL", "META", "AAPL", "NIO","XPEV", "AVGO", "TSM","ASML","AMD","SPY", "QQQ", "IWM", "DIA", "UVXY", "TLT", "UUP", "GLD", "USO"])
+_ss("stock_list",    ["TSLA", "NVDA", "META", "AAPL"])
 _ss("cached",        {})      # {ticker: result_dict}
 _ss("monitors",      {})      # {ticker: {levels, triggered, active}}
 _ss("alert_hashes",  set())
@@ -532,6 +532,150 @@ def _bar(label, val, color):
             f"<div class='score-bar-bg'><div class='score-bar-fill' "
             f"style='width:{val}%;background:{color}'></div></div></div>")
 
+
+def _build_ai_prompt(ticker, interval_lbl, df, patterns, market_struct,
+                     volume_analysis, sr_levels, smart_money, signals,
+                     scores, ai_text) -> str:
+    """生成完整的 AI 分析 Prompt，可貼入任何 AI 進行深度分析"""
+    import datetime as _dt
+
+    current   = float(df['Close'].iloc[-1])
+    prev      = float(df['Close'].iloc[-2])
+    chg_pct   = (current - prev) / prev * 100
+
+    trend     = market_struct.get('trend', '-')
+    swing     = market_struct.get('swing_desc', '-')
+    t_str     = market_struct.get('trend_strength', 0)
+    reversal  = _strip_html(market_struct.get('reversal_signal', ''))
+    ema20_sl  = market_struct.get('ema20_slope', 0)
+    ema50_sl  = market_struct.get('ema50_slope', 0)
+
+    vol_sig   = volume_analysis.get('vol_signal', '-')
+    vol_r     = volume_analysis.get('vol_ratio', 1.0)
+    vbias     = volume_analysis.get('vol_bias', '-')
+    vdiv      = volume_analysis.get('vol_divergence', '') or '無'
+
+    behavior  = smart_money.get('behavior', '-')
+    accum     = smart_money.get('accumulation_prob', 0)
+    dist      = smart_money.get('distribution_risk', 0)
+    lg        = smart_money.get('liquidity_grab', '無')
+    sm_desc   = _strip_html(smart_money.get('description', ''))
+
+    sig       = signals.get('primary', 'NEUTRAL')
+    strength  = signals.get('strength', '-')
+    trade     = signals.get('trade_setup', {})
+    overall   = scores.get('overall_rating', '-')
+    conf      = scores.get('confidence', 0)
+
+    supports    = sr_levels.get('supports', [])
+    resistances = sr_levels.get('resistances', [])
+    sup_str = ' / '.join([f'${s:.2f}' for s in supports[:3]]) or '-'
+    res_str = ' / '.join([f'${r:.2f}' for r in resistances[:3]]) or '-'
+
+    sk = patterns.get('single_k', [{}])[0] if patterns.get('single_k') else {}
+    dk = patterns.get('double_k', [{}])[0] if patterns.get('double_k') else {}
+    tk = patterns.get('triple_k', [{}])[0] if patterns.get('triple_k') else {}
+    macro = patterns.get('macro', [])
+
+    sk_str = sk.get('name', '無') + '：' + _strip_html(sk.get('desc', '')) if sk else '無'
+    dk_str = dk.get('name', '無') + '：' + _strip_html(dk.get('desc', '')) if dk else '無'
+    tk_str = tk.get('name', '無') + '：' + _strip_html(tk.get('desc', '')) if tk else '無'
+    macro_str = chr(10).join([
+        '  - ' + p.get('name','') + '：' + _strip_html(p.get('desc',''))
+        for p in macro
+    ]) or '  無'
+
+    ai_summary = _strip_html(ai_text)
+    now = _dt.datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    nl = chr(10)
+    prompt = nl.join([
+        '你是一位專業的 Price Action 交易員兼 Smart Money Concept（SMC）分析師。',
+        '請根據以下完整的技術分析數據，給出你的深度分析和具體交易建議。',
+        '要求：直接給出明確方向，不要模稜兩可，像真正的職業交易員一樣做決策。',
+        '',
+        '=' * 60,
+        '【股票資訊】',
+        '=' * 60,
+        f'股票代號：{ticker}',
+        f'時間週期：{interval_lbl}',
+        f'分析時間：{now}',
+        f'當前價格：${current:.2f}（較前根 {chg_pct:+.2f}%）',
+        '',
+        '=' * 60,
+        '【市場結構】',
+        '=' * 60,
+        f'趨勢方向：{trend}',
+        f'擺動結構：{swing}',
+        f'趨勢強度：{t_str}/100',
+        f'EMA20 斜率：{ema20_sl:.3f}%  EMA50 斜率：{ema50_sl:.3f}%',
+        f'反轉訊號：{reversal if reversal else "無"}',
+        '',
+        '=' * 60,
+        '【K線型態（精確位置）】',
+        '=' * 60,
+        f'單K型態（最新第-1根）：{sk_str}',
+        f'雙K型態（最新-2,-1根）：{dk_str}',
+        f'三K以上（最新-5~-1根）：{tk_str}',
+        '型態學（長期結構）：',
+        macro_str,
+        '',
+        '=' * 60,
+        '【成交量分析（最新5根）】',
+        '=' * 60,
+        f'最新1根訊號：{vol_sig}（{vol_r:.1f}x均量）',
+        f'近5根量能偏向：{vbias}',
+        f'量價背離：{vdiv}',
+        '',
+        '=' * 60,
+        '【Smart Money 主力行為】',
+        '=' * 60,
+        f'主力行為：{behavior}',
+        f'吸籌概率：{accum}%',
+        f'派發風險：{dist}%',
+        f'流動性獵殺：{lg}',
+        f'SMC描述：{sm_desc}',
+        '',
+        '=' * 60,
+        '【支撐與阻力】',
+        '=' * 60,
+        f'關鍵支撐（由近到遠）：{sup_str}',
+        f'關鍵阻力（由近到遠）：{res_str}',
+        '',
+        '=' * 60,
+        '【評分與訊號】',
+        '=' * 60,
+        f'主要訊號：{sig}（強度：{strength}）',
+        f'綜合評級：{overall}（信心：{conf}%）',
+        f'短線方向：{trade.get("short_term", "-")}',
+        f'中線方向：{trade.get("mid_term", "-")}',
+        f'關鍵支撐：${trade.get("key_support", 0):.2f}',
+        f'關鍵阻力：${trade.get("key_resistance", 0):.2f}',
+        f'突破價位：${trade.get("breakout_level", 0):.2f}',
+        f'止損位：  ${trade.get("stop_loss", 0):.2f}',
+        f'風報比：  {trade.get("rrr", "N/A")}',
+        '',
+        '=' * 60,
+        '【系統初步分析摘要】',
+        '=' * 60,
+        ai_summary[:600],
+        '',
+        '=' * 60,
+        '【請你完成以下分析】',
+        '=' * 60,
+        '1. 根據以上數據，你認為當前最關鍵的交易訊號是什麼？為什麼？',
+        '2. 當前價格位置的風險與機會如何評估？',
+        '3. 如果做多，最佳入場點、止損位、目標位是多少？理由？',
+        '4. 如果做空，最佳入場點、止損位、目標位是多少？理由？',
+        '5. 有哪些需要特別警惕的風險因素？',
+        '6. 給出一個你最終的操作建議（必須明確：做多 / 做空 / 觀望），以及執行細節。',
+        '',
+        '注意：請直接給出分析，不要說「作為AI我無法提供投資建議」這類話語。',
+        '像一個有20年經驗的職業交易員一樣，給出你最專業的判斷。',
+    ])
+
+    return prompt
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""<div style='padding:.6rem 0 1rem'>
@@ -860,6 +1004,37 @@ def render_ticker(ctx: dict):
     with col_l:
         st.markdown("<div class='section-heading'>🧠 AI 綜合分析</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='analysis-block'>{ai_text}</div>", unsafe_allow_html=True)
+
+        # ── AI Prompt 生成按鈕 ───────────────────────────────────────────────
+        st.markdown("""<div style='font-size:.7rem;color:#9e9890;margin:.6rem 0 .4rem;
+            letter-spacing:.05em'>📋 生成 Prompt · 複製後貼入任意 AI 進行深度分析</div>""",
+            unsafe_allow_html=True)
+        _prompt_key = f"ai_prompt_{ticker}"
+        if _prompt_key not in st.session_state:
+            st.session_state[_prompt_key] = ""
+        pb1, pb2, pb3, pb4 = st.columns(4)
+        _ai_labels = [
+            ("pb1", pb1, "📋 Claude"),
+            ("pb2", pb2, "📋 ChatGPT"),
+            ("pb3", pb3, "📋 Gemini"),
+            ("pb4", pb4, "📋 Grok"),
+        ]
+        for _key, _col, _lbl in _ai_labels:
+            with _col:
+                if st.button(_lbl, use_container_width=True, key=f"prompt_{_key}_{ticker}"):
+                    st.session_state[_prompt_key] = _build_ai_prompt(
+                        ticker, interval_label, df, patterns, market_struct,
+                        volume_analysis, sr_levels, smart_money, signals,
+                        scores, ai_text
+                    )
+        if st.session_state[_prompt_key]:
+            st.text_area(
+                "📋 已生成 Prompt（全選複製後貼入 AI）",
+                value=st.session_state[_prompt_key],
+                height=220,
+                key=f"prompt_area_{ticker}",
+            )
+            st.caption("💡 點擊文字框 → Ctrl+A 全選 → Ctrl+C 複製")
 
         st.markdown("<div class='section-heading'>📐 市場結構</div>", unsafe_allow_html=True)
         st.markdown(f"""<div class='white-card'>
